@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# :nocov:
+
 require_relative "../loader"
 require "aws-sdk-ec2"
 require "yaml"
@@ -137,3 +139,5 @@ if __FILE__ == $0
   puts "Total regions: #{data["providers"]["aws"]["locations"].keys.size}"
   puts "Regions: #{data["providers"]["aws"]["locations"].keys.join(", ")}"
 end
+
+# :nocov:
