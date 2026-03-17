@@ -79,7 +79,6 @@ if PRY_LOGGER
         result = super
 
         # Log output
-        output = result.inspect
         truncate_limit = Config.pry_logger_truncate_limit
         output = "#{output[0..truncate_limit]}..." if output.length > truncate_limit
         PRY_LOGGER.log(output, app: "pry", level: "info", type: "pry_output", counter: @counter)
