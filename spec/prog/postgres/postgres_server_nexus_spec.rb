@@ -741,7 +741,23 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
     it "hops to wait for primaries if configure command is succeeded at times other than the initial provisioning" do
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 clean configure_postgres").and_return("Succeeded")
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check configure_postgres").and_return("Succeeded")
+      expect(server).to receive(:_run_query).with("SELECT pg_is_in_recovery()").and_return("f")
       expect { nx.configure }.to hop("wait")
+    end
+
+    it "promotes PostgreSQL out of recovery if primary is still in recovery after configure" do
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 clean configure_postgres").and_return("Succeeded")
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check configure_postgres").and_return("Succeeded")
+      expect(server).to receive(:run_query).with("SELECT pg_is_in_recovery()").and_return("t")
+      expect(server).to receive(:run_query).with("SELECT pg_promote()")
+      expect { nx.configure }.to nap(1)
+    end
+
+    it "naps if pg_is_in_recovery check fails during configure" do
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 clean configure_postgres").and_return("Succeeded")
+      expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check configure_postgres").and_return("Succeeded")
+      expect(server).to receive(:run_query).with("SELECT pg_is_in_recovery()").and_raise(Sshable::SshError.new("", nil, "connection error", nil, nil))
+      expect { nx.configure }.to nap(5)
     end
 
     it "hops to wait_catchup for standbys if configure command is succeeded at times other than the initial provisioning" do
@@ -771,6 +787,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       standby_nx.postgres_server.update(synchronization_status: "ready")
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 clean configure_postgres").and_return("Succeeded")
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check configure_postgres").and_return("Succeeded")
+      expect(server).to receive(:_run_query).with("SELECT pg_is_in_recovery()").and_return("f")
       expect { nx.configure }.to hop("wait")
       expect(standby_nx.postgres_server.reload.use_physical_slot_set?).to be true
       expect(standby_nx.postgres_server.configure_set?).to be true

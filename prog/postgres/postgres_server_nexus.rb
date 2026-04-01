@@ -430,6 +430,20 @@ CONFIG
       hop_wait_catch_up if postgres_server.standby? && postgres_server.synchronization_status != "ready"
 
       if postgres_server.primary?
+        # After promoting a read replica, PostgreSQL may still be in recovery
+        # because standby.signal was present during initialization. Promote PG
+        # out of recovery so it can accept writes.
+        begin
+          if postgres_server.run_query("SELECT pg_is_in_recovery()").chomp == "t"
+            postgres_server.run_query("SELECT pg_promote()")
+            nap 1
+          end
+        rescue FlowControl
+          raise
+        rescue
+          nap 5
+        end
+
         resource.servers.select { it.standby? && it.synchronization_status == "ready" && it.physical_slot_ready_id != postgres_server.id }.each do |standby|
           standby.incr_use_physical_slot
           standby.incr_configure
