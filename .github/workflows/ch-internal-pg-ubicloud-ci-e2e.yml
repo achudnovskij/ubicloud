@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: '0 0,8,16 * * *'
 
+concurrency:
+  group: pg-ubicloud-ci-e2e
+  cancel-in-progress: false
+
 permissions:
   id-token: write
   contents: read
@@ -36,7 +40,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ClickHouse/data-plane-application
-          ref: andreyc/pg-ubicloud-e2e-test
+          ref: main
           token: ${{ steps.app-token.outputs.token }}
           path: data-plane-application
 
@@ -131,6 +135,7 @@ jobs:
 
       - name: Run smoke test
         id: smoke_test
+        continue-on-error: true
         timeout-minutes: 10
         run: |
           set -o pipefail
@@ -147,7 +152,8 @@ jobs:
 
       - name: Retry smoke test
         id: smoke_test_retry
-        if: failure() && steps.smoke_test.outcome == 'failure'
+        if: steps.smoke_test.outcome == 'failure'
+        continue-on-error: true
         timeout-minutes: 10
         run: |
           set -o pipefail
@@ -162,9 +168,15 @@ jobs:
           grep -q "RESULT_SUCCESS" /tmp/ci-logs/smoke-test-retry.log || { echo "FAIL: RESULT_SUCCESS not found in smoke test retry output"; exit 1; }
           ! grep -qE "RESULT_ERROR|^Error:" /tmp/ci-logs/smoke-test-retry.log || { echo "FAIL: errors found in smoke test retry output"; exit 1; }
 
+      - name: Fail if smoke test failed
+        if: steps.smoke_test.outcome == 'failure' && steps.smoke_test_retry.outcome != 'success'
+        run: |
+          echo "Smoke test failed on both attempts"
+          exit 1
+
       - name: Run stresshouse E2E test
         id: e2e_test
-        if: success() || (steps.smoke_test_retry.outcome == 'success')
+        continue-on-error: true
         timeout-minutes: 20
         run: |
           set -o pipefail
@@ -182,7 +194,8 @@ jobs:
 
       - name: Retry stresshouse E2E test
         id: e2e_test_retry
-        if: failure() && steps.e2e_test.outcome == 'failure'
+        if: steps.e2e_test.outcome == 'failure'
+        continue-on-error: true
         timeout-minutes: 20
         run: |
           set -o pipefail
@@ -195,6 +208,104 @@ jobs:
             2>&1 | tee /tmp/ci-logs/e2e-test-retry.log
           grep -q "RESULT_SUCCESS" /tmp/ci-logs/e2e-test-retry.log || { echo "FAIL: RESULT_SUCCESS not found in test output"; exit 1; }
           ! grep -qE "RESULT_ERROR|^Error:" /tmp/ci-logs/e2e-test-retry.log || { echo "FAIL: errors found in test output"; exit 1; }
+
+      - name: Fail if E2E test failed
+        if: steps.e2e_test.outcome == 'failure' && steps.e2e_test_retry.outcome != 'success'
+        run: |
+          echo "E2E test failed on both attempts"
+          exit 1
+
+      - name: Collect debug info
+        if: always()
+        run: |
+          mkdir -p /tmp/ci-logs
+          docker compose \
+            -f .devcontainer/docker-compose.yml \
+            -f .devcontainer/docker-compose.ci.yml \
+            exec -T app \
+            cat /var/log/foreman/foreman.log > /tmp/ci-logs/foreman.log 2>/dev/null || true
+          docker compose \
+            -f .devcontainer/docker-compose.yml \
+            -f .devcontainer/docker-compose.ci.yml \
+            logs > /tmp/ci-logs/docker-compose.log 2>&1 || true
+          docker compose \
+            -f .devcontainer/docker-compose.yml \
+            -f .devcontainer/docker-compose.ci.yml \
+            exec -T app bash -c '
+              RACK_ENV=development bundle exec ruby -r ./loader -e "
+                strands = Strand.where(Sequel.like(:prog, \"%Postgres%\")).all
+                strands.each do |s|
+                  puts \"id=#{s.id} prog=#{s.prog} label=#{s.label} exitval=#{s.exitval}\"
+                  puts \"  stack: #{s.stack}\"
+                end
+              " 2>/dev/null
+            ' > /tmp/ci-logs/strand-state.log 2>/dev/null || true
+
+      - name: Triage failure with Claude
+        if: failure()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          PROMPT=$(cat <<'EOF'
+          You are debugging a failed test in the Ubicloud CI pipeline.
+          The test source is in data-plane-application/stresshouse/tests/experimental/ubicloud/.
+          Read the test code to understand what it does before investigating.
+
+          ## Available tools
+
+          You have access to tools defined in .claude/settings.json: Read files, Edit files,
+          Bash (git, grep, cat, tail, curl, bundle exec, docker compose exec, ssh, python3,
+          .devcontainer/scripts/*.sh). Use these to investigate.
+
+          The devcontainer is running. You can exec into it:
+          ```bash
+          docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.ci.yml exec -T app <command>
+          ```
+          This gives you access to: DB queries (bundle exec ruby -r ./loader), Ubicloud API
+          (.devcontainer/scripts/invoke_ubicloud_api_curl.sh), foreman restart, code changes.
+
+          If you need a tool that is not permitted, note it in your output under NEEDS_MORE.
+
+          ## Investigation
+
+          Read these log files to understand the failure:
+          - /tmp/ci-logs/smoke-test.log — smoke test attempt output
+          - /tmp/ci-logs/smoke-test-retry.log — smoke test retry output (if exists)
+          - /tmp/ci-logs/e2e-test.log — E2E test attempt output (if smoke passed)
+          - /tmp/ci-logs/foreman.log — Ubicloud foreman (strand runner) logs
+          - /tmp/ci-logs/strand-state.log — strand state dump from DB
+          - /tmp/ci-logs/docker-compose.log — container logs
+
+          Then dig deeper: read the relevant source code, check git history for recent changes
+          to the failing code path, and correlate errors across logs.
+
+          ## Classification
+
+          Classify the root cause into exactly one category:
+
+          1. TEST_PROBLEM — workflow misconfiguration, wrong API params, timing issue, test infra failure
+          2. INFRASTRUCTURE_PROBLEM — AWS issue (AMI not accessible, VPC limits, IAM permissions, region issue)
+          3. CODE_REGRESSION — Ubicloud code bug (strand crash, migration issue, logic error)
+
+          If the category is CODE_REGRESSION, also identify the likely culprit commit:
+          - Run `git log --oneline -20` to see recent commits
+          - Check `git log --oneline --since="1 week ago"` for recent changes
+          - Use `git log --oneline -- <file>` for files involved in the failure
+          - Report the most likely commit SHA and title
+
+          ## Output
+
+          Output your findings in this exact format:
+
+          CATEGORY: <one of TEST_PROBLEM, INFRASTRUCTURE_PROBLEM, CODE_REGRESSION>
+          ANALYSIS: <2-3 sentence explanation of the root cause>
+          EVIDENCE: <key log lines or facts that support your conclusion>
+          VERIFIED: <yes/no — did you confirm the hypothesis by retrying?>
+          CULPRIT_COMMIT: <SHA and title if CODE_REGRESSION, otherwise N/A>
+          NEEDS_MORE: <list of tools/permissions needed for deeper investigation, or N/A>
+          EOF
+          )
+          npx -y @anthropic-ai/claude-code --print "$PROMPT"
 
       - name: Cleanup Postgres resources
         if: always()
@@ -315,96 +426,6 @@ jobs:
             aws ec2 delete-vpc --vpc-id $vpc_id --region $REGION 2>/dev/null || true
           done
           echo "=== Stale resource cleanup complete ==="
-
-      - name: Collect debug info
-        if: always()
-        run: |
-          mkdir -p /tmp/ci-logs
-          docker compose \
-            -f .devcontainer/docker-compose.yml \
-            -f .devcontainer/docker-compose.ci.yml \
-            exec -T app \
-            cat /var/log/foreman/foreman.log > /tmp/ci-logs/foreman.log 2>/dev/null || true
-          docker compose \
-            -f .devcontainer/docker-compose.yml \
-            -f .devcontainer/docker-compose.ci.yml \
-            logs > /tmp/ci-logs/docker-compose.log 2>&1 || true
-          docker compose \
-            -f .devcontainer/docker-compose.yml \
-            -f .devcontainer/docker-compose.ci.yml \
-            exec -T app bash -c '
-              RACK_ENV=development bundle exec ruby -r ./loader -e "
-                strands = Strand.where(Sequel.like(:prog, \"%Postgres%\")).all
-                strands.each do |s|
-                  puts \"id=#{s.id} prog=#{s.prog} label=#{s.label} exitval=#{s.exitval}\"
-                  puts \"  stack: #{s.stack}\"
-                end
-              " 2>/dev/null
-            ' > /tmp/ci-logs/strand-state.log 2>/dev/null || true
-
-      - name: Triage failure with Claude
-        if: failure()
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          npx -y @anthropic-ai/claude-code --print <<'PROMPT'
-            You are debugging a failed test in the Ubicloud CI pipeline.
-            The test source is in data-plane-application/stresshouse/tests/experimental/ubicloud/.
-            Read the test code to understand what it does before investigating.
-
-            ## Available tools
-
-            You have access to tools defined in .claude/settings.json: Read files, Edit files,
-            Bash (git, grep, cat, tail, curl, bundle exec, docker compose exec, ssh, python3,
-            .devcontainer/scripts/*.sh). Use these to investigate.
-
-            The devcontainer is running. You can exec into it:
-            ```bash
-            docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.ci.yml exec -T app <command>
-            ```
-            This gives you access to: DB queries (bundle exec ruby -r ./loader), Ubicloud API
-            (.devcontainer/scripts/invoke_ubicloud_api_curl.sh), foreman restart, code changes.
-
-            If you need a tool that is not permitted, note it in your output under NEEDS_MORE.
-
-            ## Investigation
-
-            Read these log files to understand the failure:
-            - /tmp/ci-logs/smoke-test.log — smoke test attempt output
-            - /tmp/ci-logs/smoke-test-retry.log — smoke test retry output (if exists)
-            - /tmp/ci-logs/e2e-test.log — E2E test attempt output (if smoke passed)
-            - /tmp/ci-logs/foreman.log — Ubicloud foreman (strand runner) logs
-            - /tmp/ci-logs/strand-state.log — strand state dump from DB
-            - /tmp/ci-logs/docker-compose.log — container logs
-
-            Then dig deeper: read the relevant source code, check git history for recent changes
-            to the failing code path, and correlate errors across logs.
-
-            ## Classification
-
-            Classify the root cause into exactly one category:
-
-            1. TEST_PROBLEM — workflow misconfiguration, wrong API params, timing issue, test infra failure
-            2. INFRASTRUCTURE_PROBLEM — AWS issue (AMI not accessible, VPC limits, IAM permissions, region issue)
-            3. CODE_REGRESSION — Ubicloud code bug (strand crash, migration issue, logic error)
-
-            If the category is CODE_REGRESSION, also identify the likely culprit commit:
-            - Run `git log --oneline -20` to see recent commits
-            - Check `git log --oneline --since="1 week ago"` for recent changes
-            - Use `git log --oneline -- <file>` for files involved in the failure
-            - Report the most likely commit SHA and title
-
-            ## Output
-
-            Output your findings in this exact format:
-
-            CATEGORY: <one of TEST_PROBLEM, INFRASTRUCTURE_PROBLEM, CODE_REGRESSION>
-            ANALYSIS: <2-3 sentence explanation of the root cause>
-            EVIDENCE: <key log lines or facts that support your conclusion>
-            VERIFIED: <yes/no — did you confirm the hypothesis by retrying?>
-            CULPRIT_COMMIT: <SHA and title if CODE_REGRESSION, otherwise N/A>
-            NEEDS_MORE: <list of tools/permissions needed for deeper investigation, or N/A>
-          PROMPT
 
       - name: Upload logs
         if: always()
