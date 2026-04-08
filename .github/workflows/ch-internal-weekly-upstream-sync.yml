@@ -1,9 +1,9 @@
 name: ch-internal-weekly-upstream-sync
 
 on:
-  schedule:
-    # Every Tuesday at 14:30 UTC
-    - cron: '30 14 * * 2'
+#  schedule:
+#    # Every Tuesday at 14:30 UTC
+#    - cron: '30 14 * * 2'
   workflow_dispatch:
     inputs:
       skip_previous_issue:
@@ -211,7 +211,8 @@ jobs:
             --repo ${{ github.repository }} \
             --title "$TITLE" \
             --body-file /tmp/new-issue.md \
-            --label pull-upstream)
+            --label pull-upstream \
+            --assignee "${{ github.actor }}")
 
           echo "✓ Issue created: $ISSUE_URL"
           echo "issue_url=$ISSUE_URL" >> $GITHUB_OUTPUT
