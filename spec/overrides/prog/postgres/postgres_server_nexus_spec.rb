@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "cgi"
+require "uri"
 require "open3"
 require_relative "../../../prog/postgres/spec_helper"
 
@@ -291,8 +291,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
         stub_request(:post, "https://test-auth.example.com/oauth/token")
           .with { |request|
-            body_params = CGI.parse(request.body)
-            metadata_json = JSON.parse(body_params["aws_client_metadata"].first) if body_params["aws_client_metadata"]
+            body_params = URI.decode_www_form(request.body).to_h
+            metadata_json = JSON.parse(body_params["aws_client_metadata"]) if body_params["aws_client_metadata"]
             true
           }
           .to_return(
@@ -321,8 +321,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
         stub_request(:post, "https://test-auth.example.com/oauth/token")
           .with { |request|
-            body_params = CGI.parse(request.body)
-            metadata_json = JSON.parse(body_params["aws_client_metadata"].first) if body_params["aws_client_metadata"]
+            body_params = URI.decode_www_form(request.body).to_h
+            metadata_json = JSON.parse(body_params["aws_client_metadata"]) if body_params["aws_client_metadata"]
             true
           }
           .to_return(
@@ -366,8 +366,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
       stub_request(:post, "https://test-auth.example.com/oauth/token")
         .with { |request|
-          params = CGI.parse(request.body)
-          params["grant_type"] == ["client_credentials"] && !params.key?("audience")
+          params = URI.decode_www_form(request.body).to_h
+          params["grant_type"] == "client_credentials" && !params.key?("audience")
         }
         .to_return(
           status: 200,
