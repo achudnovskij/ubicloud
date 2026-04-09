@@ -70,6 +70,15 @@ module Config
   optional :hetzner_ssh_private_key_passphrase, string, clear: true
   optional :operator_ssh_public_keys, string
   override :staging, false, bool
+  # :nocov:
+  override :pry_prompt_name, (if staging
+                                "clover-staging"
+                              elsif production?
+                                "\e[41m⚠️ clover-#{rack_env}\e[0m"
+                              else
+                                "clover-#{rack_env}"
+                              end), string
+  # :nocov:
   override :clover_freeze, false, bool
   optional :override_dir, string
 
