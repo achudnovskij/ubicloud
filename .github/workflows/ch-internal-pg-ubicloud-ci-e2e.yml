@@ -2,6 +2,11 @@ name: pg-ubicloud-ci E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      stresshouse_ref:
+        description: 'data-plane-application branch for stresshouse tests'
+        required: false
+        default: 'main'
   schedule:
     - cron: '0 */4 * * *'
 
@@ -36,7 +41,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ClickHouse/data-plane-application
-          ref: main
+          ref: ${{ inputs.stresshouse_ref || 'main' }}
           token: ${{ steps.app-token.outputs.token }}
           path: data-plane-application
 
@@ -141,12 +146,12 @@ jobs:
             --entrypoint /app/provision_smoke \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/smoke-test.log 2>&1 ; SMOKE_EXIT=$?
+            > /tmp/ci-logs/smoke-test.log 2>&1 || SMOKE_EXIT=$?
           cat /tmp/ci-logs/smoke-test.log
           # StressHouse SDK exit codes: 0=success, 3=run error, etc.
           # continue-on-error above lets the job proceed; GH Actions sets
           # steps.smoke_test.outcome from this exit code for retry logic.
-          exit $SMOKE_EXIT
+          exit ${SMOKE_EXIT:-0}
 
       - name: Retry smoke test
         id: smoke_test_retry
@@ -161,9 +166,9 @@ jobs:
             --entrypoint /app/provision_smoke \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/smoke-test-retry.log 2>&1 ; SMOKE_EXIT=$?
+            > /tmp/ci-logs/smoke-test-retry.log 2>&1 || SMOKE_EXIT=$?
           cat /tmp/ci-logs/smoke-test-retry.log
-          exit $SMOKE_EXIT
+          exit ${SMOKE_EXIT:-0}
 
       - name: Fail if smoke test failed
         if: steps.smoke_test.outcome == 'failure' && steps.smoke_test_retry.outcome != 'success'
@@ -183,12 +188,12 @@ jobs:
             --add-host "api.localhost:${APP_IP}" \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/e2e-test.log 2>&1 ; E2E_EXIT=$?
+            > /tmp/ci-logs/e2e-test.log 2>&1 || E2E_EXIT=$?
           cat /tmp/ci-logs/e2e-test.log
           # StressHouse SDK exit codes: 0=success, 3=run error, etc.
           # continue-on-error above lets the job proceed; GH Actions sets
           # steps.e2e_test.outcome from this exit code for retry logic.
-          exit $E2E_EXIT
+          exit ${E2E_EXIT:-0}
 
       - name: Retry stresshouse E2E test
         id: e2e_test_retry
@@ -202,9 +207,9 @@ jobs:
             --add-host "api.localhost:${APP_IP}" \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/e2e-test-retry.log 2>&1 ; E2E_EXIT=$?
+            > /tmp/ci-logs/e2e-test-retry.log 2>&1 || E2E_EXIT=$?
           cat /tmp/ci-logs/e2e-test-retry.log
-          exit $E2E_EXIT
+          exit ${E2E_EXIT:-0}
 
       - name: Fail if E2E test failed
         if: steps.e2e_test.outcome == 'failure' && steps.e2e_test_retry.outcome != 'success'

@@ -1,6 +1,5 @@
 FROM ubuntu:24.04
 
-ARG RUBY_VERSION=3.4.9
 ARG NODE_VERSION=24.12.0
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WORKSPACE_FOLDER_NAME=ubicloud
@@ -60,31 +59,39 @@ RUN useradd -m -s /bin/bash vscode \
 USER vscode
 WORKDIR /home/vscode
 
-# Install mise, Ruby, Node.js, bundler, and foreman in a single layer
-# to avoid devcontainer builder stage injection breaking layer ordering
+# Install mise and Node.js (Node changes less frequently than Ruby)
 RUN curl https://mise.run | sh \
     && echo 'eval "$(/home/vscode/.local/bin/mise activate bash)"' >> /home/vscode/.bashrc \
-    && /home/vscode/.local/bin/mise install ruby@${RUBY_VERSION} node@${NODE_VERSION} \
-    && /home/vscode/.local/bin/mise use --global ruby@${RUBY_VERSION} node@${NODE_VERSION}
+    && /home/vscode/.local/bin/mise install node@${NODE_VERSION} \
+    && /home/vscode/.local/bin/mise use --global node@${NODE_VERSION}
 
-ENV PATH="/home/vscode/.local/bin:/home/vscode/.local/share/mise/installs/ruby/${RUBY_VERSION}/bin:/home/vscode/.local/share/mise/installs/node/${NODE_VERSION}/bin:$PATH" \
+# Use mise shims for version-independent PATH
+ENV PATH="/home/vscode/.local/share/mise/shims:/home/vscode/.local/bin:${PATH}" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# Install bundler and foreman
-RUN gem install bundler foreman
-
 WORKDIR /workspaces/${WORKSPACE_FOLDER_NAME}
 
-# Copy dependency files and install dependencies (cached unless Gemfile/package.json change)
-COPY --chown=vscode:vscode Gemfile Gemfile.lock ./
-RUN bundle install
-
+# Install Node dependencies (cached unless package.json changes)
 COPY --chown=vscode:vscode package.json package-lock.json ./
 RUN npm install
 
 # Install Claude Code globally
 RUN npm install -g @anthropic-ai/claude-code
+
+# --- Ruby version boundary ---
+# Ruby version is read from .tool-versions (single source of truth shared with Gemfile)
+COPY --chown=vscode:vscode .tool-versions .tool-versions
+RUN RUBY_VERSION=$(awk '/^ruby/ {print $2}' .tool-versions) \
+    && /home/vscode/.local/bin/mise install ruby@${RUBY_VERSION} \
+    && /home/vscode/.local/bin/mise use --global ruby@${RUBY_VERSION}
+
+# Install bundler and foreman
+RUN gem install bundler foreman
+
+# Install Ruby dependencies (cached unless Gemfile changes)
+COPY --chown=vscode:vscode Gemfile Gemfile.lock ./
+RUN bundle install
 
 # Copy app source and generate .env.rb
 COPY --chown=vscode:vscode . .
