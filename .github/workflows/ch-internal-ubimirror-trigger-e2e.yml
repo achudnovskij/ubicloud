@@ -23,10 +23,14 @@ jobs:
             const contributorIds = contributors.data.map(c => c.id);
             const isContributor = contributorIds.includes(context.payload.comment.user.id);
 
-            // Check if the given test cases string is secure or empty
-            const testCases = (context.payload.comment.body.trim().split(/\s+/)[1]) || '';
+            // Parse arguments: /run-e2e [providers] [test_cases]
+            const args = context.payload.comment.body.trim().split(/\s+/);
+            const providers = args[1] || '';
+            const testCases = args[2] || '';
+            console.log(`providers: ${providers}`);
             console.log(`testCases: ${testCases}`);
-            const isValid = testCases ? /^[a-zA-Z0-9_,-]+$/.test(testCases) : true;
+            const inputPattern = /^[a-zA-Z0-9_,-]+$/;
+            const isValid = (!providers || inputPattern.test(providers)) && (!testCases || inputPattern.test(testCases));
             console.log(`Is valid: ${isValid}`);
 
             const allowedToRun = isContributor && isValid;
@@ -52,14 +56,27 @@ jobs:
             });
 
             // Create a workflow dispatch event
-            const inputs = testCases ? { test_cases: testCases } : {}
-            await github.rest.actions.createWorkflowDispatch({
+            const inputs = {}
+            if (providers) inputs.providers = providers;
+            if (testCases) inputs.test_cases = testCases;
+            const dispatch = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'e2e.yml',
               ref: pullRequest.data.head.ref,
-              inputs: inputs
+              inputs: inputs,
+              return_run_details: true
             });
+
+            // Append the workflow run URL to the original comment
+            if (dispatch.data?.html_url) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: context.payload.comment.id,
+                body: `${context.payload.comment.body}\n\nE2E tests triggered: ${dispatch.data.html_url}`
+              });
+            }
 env:
   LANG: en_US.UTF-8
   LC_ALL: en_US.UTF-8

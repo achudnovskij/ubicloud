@@ -48,6 +48,10 @@ jobs:
         run: bundle exec rake refresh_sequel_caches
       - name: Check that source code formatters and annotations make no changes
         run: git diff --stat --exit-code
+      - name: Test migrating down
+        run: bundle exec rake _test_down VERSION=20250721
+      - name: Test migrating back up
+        run: bundle exec rake _test_up
       - name: Check production puma loads
         env:
           CLOVER_DATABASE_URL: postgres:///clover_test?user=clover
@@ -61,11 +65,9 @@ jobs:
         run: bundle exec rake
       - name: Run dataplane tests
         run: bundle exec rake rhizome_spec
-      - name: Run CSI tests
-        run: rake csi_spec
       - name: Archive code coverage results
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: code-coverage-report-${{ matrix.runs-on }}
           path: coverage/

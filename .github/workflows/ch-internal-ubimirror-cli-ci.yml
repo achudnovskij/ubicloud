@@ -7,6 +7,7 @@ on:
     branches:
       - clickhouse
     paths:
+      - '.tool-versions'
       - 'cli/**'
       - 'bin/ubi'
       - 'spec/cli_spec.rb'
@@ -14,6 +15,7 @@ on:
       - '.github/actions/setup-clover/action.yml'
   pull_request:
     paths:
+      - '.tool-versions'
       - 'cli/**'
       - 'bin/ubi'
       - 'spec/cli_spec.rb'
