@@ -177,4 +177,137 @@ RSpec.describe Clover, "clickgres-billing" do
       expect(body["items"].size).to eq(1)
     end
   end
+
+  describe "POST /project/:project_id/clickgres-billing/postgres-details" do
+    before do
+      postgres_project = Project.create(name: "default")
+      allow(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id)
+    end
+
+    def create_pg(name, org_id)
+      Prog::Postgres::PostgresResourceNexus.assemble(
+        project_id: project.id,
+        location_id: Location.first.id,
+        name:,
+        target_vm_size: "standard-2",
+        target_storage_size_gib: 128,
+        tags: [{key: "chc_org_id", value: org_id}],
+      ).subject
+    end
+
+    it "returns 400 when neither ids nor chc_org_id is provided" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", "{}"
+      expect(last_response.status).to eq(400)
+      expect(JSON.parse(last_response.body).dig("error", "message")).to eq("At least one of 'ids' or 'chc_org_id' must be provided")
+    end
+
+    it "returns 400 for empty ids array" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: []}.to_json
+      expect(last_response.status).to eq(400)
+    end
+
+    it "returns 400 for invalid id format" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: ["not-a-valid-id"]}.to_json
+      expect(last_response.status).to eq(400)
+      expect(JSON.parse(last_response.body).dig("error", "message")).to eq("Invalid id format: not-a-valid-id")
+    end
+
+    it "returns 400 when ids exceed maximum" do
+      ids = Array.new(201) { SecureRandom.uuid }
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids:}.to_json
+      expect(last_response.status).to eq(400)
+      expect(JSON.parse(last_response.body).dig("error", "message")).to eq("Maximum of 200 ids allowed per request")
+    end
+
+    it "returns resources filtered by ids using UBID format" do
+      pg1 = create_pg("pg-test-1", "org-AAA")
+      create_pg("pg-test-2", "org-AAA")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: [pg1.ubid]}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(1)
+      expect(body["items"].first["id"]).to eq(pg1.ubid)
+    end
+
+    it "returns resources filtered by ids using UUID format" do
+      pg1 = create_pg("pg-uuid-1", "org-AAA")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: [pg1.id]}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(1)
+      expect(body["items"].first["id"]).to eq(pg1.ubid)
+    end
+
+    it "returns resources filtered by ids with mixed UBID and UUID formats" do
+      pg1 = create_pg("pg-mix-1", "org-AAA")
+      pg2 = create_pg("pg-mix-2", "org-BBB")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: [pg1.ubid, pg2.id]}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(2)
+      returned_ids = body["items"].map { it["id"] }
+      expect(returned_ids).to contain_exactly(pg1.ubid, pg2.ubid)
+    end
+
+    it "returns resources filtered by chc_org_id only" do
+      pg1 = create_pg("pg-org-1", "org-AAA")
+      pg2 = create_pg("pg-org-2", "org-AAA")
+      create_pg("pg-org-3", "org-BBB")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {chc_org_id: "org-AAA"}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(2)
+      returned_ids = body["items"].map { it["id"] }
+      expect(returned_ids).to contain_exactly(pg1.ubid, pg2.ubid)
+    end
+
+    it "returns intersection when both ids and chc_org_id are provided" do
+      pg1 = create_pg("pg-both-1", "org-AAA")
+      pg2 = create_pg("pg-both-2", "org-BBB")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: [pg1.ubid, pg2.ubid], chc_org_id: "org-AAA"}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(1)
+      expect(body["items"].first["id"]).to eq(pg1.ubid)
+    end
+
+    it "returns empty list when no resources match" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {chc_org_id: "org-NONEXISTENT"}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"]).to eq([])
+    end
+
+    it "returns empty list for nonexistent ids" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {ids: ["pgqxkxmkdcpp7hj8tppqceat4n"]}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"]).to eq([])
+    end
+
+    it "scopes to the project in the URL path" do
+      pg1 = create_pg("pg-scoped-1", "org-AAA")
+
+      other_project = Project.create(name: "other-project")
+      Prog::Postgres::PostgresResourceNexus.assemble(
+        project_id: other_project.id,
+        location_id: Location.first.id,
+        name: "pg-other-1",
+        target_vm_size: "standard-2",
+        target_storage_size_gib: 128,
+        tags: [{key: "chc_org_id", value: "org-AAA"}],
+      ).subject
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres-details", {chc_org_id: "org-AAA"}.to_json
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["items"].size).to eq(1)
+      expect(body["items"].first["id"]).to eq(pg1.ubid)
+    end
+  end
 end

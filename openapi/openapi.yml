@@ -124,6 +124,8 @@ paths:
           $ref: '#/components/responses/Error'
       tags:
         - Audit Log
+  '/project/{project_id}/clickgres-billing/postgres-details':
+    $ref: './openapi-clickgres.yml#/paths/~1project~1{project_id}~1clickgres-billing~1postgres-details'
   '/project/{project_id}/clickgres-billing/postgres-resources':
     $ref: './openapi-clickgres.yml#/paths/~1project~1{project_id}~1clickgres-billing~1postgres-resources'
   '/project/{project_id}/firewall':
