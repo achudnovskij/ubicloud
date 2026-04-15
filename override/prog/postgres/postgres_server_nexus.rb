@@ -81,12 +81,14 @@ receivers:
     config:
       scrape_configs:
         - job_name: node
+          scrape_interval: 30s
           static_configs:
             - targets: ['localhost:9100']
   prometheus/postgres:
     config:
       scrape_configs:
         - job_name: postgres
+          scrape_interval: 30s
           static_configs:
             - targets: ['localhost:9187']
   filelog/postgresql_json:
@@ -226,7 +228,7 @@ service:
       level: normal
       readers:
         - periodic:
-            interval: 60000
+            interval: 30000
             exporter:
               otlp:
                 protocol: grpc
