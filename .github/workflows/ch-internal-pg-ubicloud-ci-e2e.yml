@@ -75,7 +75,7 @@ jobs:
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
           context: data-plane-application
-          file: data-plane-application/stresshouse/tests/experimental/ubicloud/Dockerfile
+          file: data-plane-application/stresshouse/tests/experimental/postgres/Dockerfile
           load: true
           tags: ${{ env.STRESSHOUSE_IMAGE }}
           build-args: GOPRIVATE=go.clickhouse.com/*
@@ -143,7 +143,7 @@ jobs:
           docker run --rm \
             --network devcontainer_ubicloud \
             --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/provision_smoke \
+            --entrypoint /app/pg_ubi_provision_smoke \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
             > /tmp/ci-logs/smoke-test.log 2>&1 || SMOKE_EXIT=$?
@@ -163,7 +163,7 @@ jobs:
           docker run --rm \
             --network devcontainer_ubicloud \
             --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/provision_smoke \
+            --entrypoint /app/pg_ubi_provision_smoke \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
             > /tmp/ci-logs/smoke-test-retry.log 2>&1 || SMOKE_EXIT=$?
@@ -186,6 +186,7 @@ jobs:
           docker run --rm \
             --network devcontainer_ubicloud \
             --add-host "api.localhost:${APP_IP}" \
+            --entrypoint /app/pg_ubi_avail_replicas \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
             > /tmp/ci-logs/e2e-test.log 2>&1 || E2E_EXIT=$?
@@ -205,6 +206,7 @@ jobs:
           docker run --rm \
             --network devcontainer_ubicloud \
             --add-host "api.localhost:${APP_IP}" \
+            --entrypoint /app/pg_ubi_avail_replicas \
             ${{ env.STRESSHOUSE_IMAGE }} \
             --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
             > /tmp/ci-logs/e2e-test-retry.log 2>&1 || E2E_EXIT=$?
