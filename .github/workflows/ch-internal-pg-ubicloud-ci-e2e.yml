@@ -134,90 +134,40 @@ jobs:
       - name: Create logs directory
         run: mkdir -p /tmp/ci-logs
 
-      - name: Run smoke test
-        id: smoke_test
-        continue-on-error: true
-        timeout-minutes: 10
-        run: |
-          APP_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' devcontainer-app-1)
-          docker run --rm \
-            --network devcontainer_ubicloud \
-            --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/pg_ubi_provision_smoke \
-            ${{ env.STRESSHOUSE_IMAGE }} \
-            --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/smoke-test.log 2>&1 || SMOKE_EXIT=$?
-          cat /tmp/ci-logs/smoke-test.log
-          # StressHouse SDK exit codes: 0=success, 3=run error, etc.
-          # continue-on-error above lets the job proceed; GH Actions sets
-          # steps.smoke_test.outcome from this exit code for retry logic.
-          exit ${SMOKE_EXIT:-0}
+      - name: Get devcontainer IP
+        id: app_ip
+        run: echo "ip=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' devcontainer-app-1)" >> "$GITHUB_OUTPUT"
 
-      - name: Retry smoke test
-        id: smoke_test_retry
-        if: steps.smoke_test.outcome == 'failure'
-        continue-on-error: true
-        timeout-minutes: 10
-        run: |
-          APP_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' devcontainer-app-1)
-          docker run --rm \
-            --network devcontainer_ubicloud \
-            --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/pg_ubi_provision_smoke \
-            ${{ env.STRESSHOUSE_IMAGE }} \
-            --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/smoke-test-retry.log 2>&1 || SMOKE_EXIT=$?
-          cat /tmp/ci-logs/smoke-test-retry.log
-          exit ${SMOKE_EXIT:-0}
+      - name: Smoke test
+        uses: ./.github/actions/run-stresshouse-test
+        with:
+          name: Smoke test
+          entrypoint: /app/pg_ubi_provision_smoke
+          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}'
+          image: ${{ env.STRESSHOUSE_IMAGE }}
+          network: devcontainer_ubicloud
+          api_host: ${{ steps.app_ip.outputs.ip }}
+          timeout: "10"
 
-      - name: Fail if smoke test failed
-        if: steps.smoke_test.outcome == 'failure' && steps.smoke_test_retry.outcome != 'success'
-        run: |
-          echo "Smoke test failed on both attempts"
-          exit 1
+      - name: E2E availability replicas (PG17)
+        uses: ./.github/actions/run-stresshouse-test
+        with:
+          name: E2E avail replicas PG17
+          entrypoint: /app/pg_ubi_avail_replicas
+          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237,"pg_version":"17"}'
+          image: ${{ env.STRESSHOUSE_IMAGE }}
+          network: devcontainer_ubicloud
+          api_host: ${{ steps.app_ip.outputs.ip }}
 
-      - name: Run stresshouse E2E test
-        id: e2e_test
-        continue-on-error: true
-        timeout-minutes: 20
-        run: |
-          # Run stresshouse container on the devcontainer's network so it can reach the API
-          APP_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' devcontainer-app-1)
-          docker run --rm \
-            --network devcontainer_ubicloud \
-            --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/pg_ubi_avail_replicas \
-            ${{ env.STRESSHOUSE_IMAGE }} \
-            --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/e2e-test.log 2>&1 || E2E_EXIT=$?
-          cat /tmp/ci-logs/e2e-test.log
-          # StressHouse SDK exit codes: 0=success, 3=run error, etc.
-          # continue-on-error above lets the job proceed; GH Actions sets
-          # steps.e2e_test.outcome from this exit code for retry logic.
-          exit ${E2E_EXIT:-0}
-
-      - name: Retry stresshouse E2E test
-        id: e2e_test_retry
-        if: steps.e2e_test.outcome == 'failure'
-        continue-on-error: true
-        timeout-minutes: 20
-        run: |
-          APP_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' devcontainer-app-1)
-          docker run --rm \
-            --network devcontainer_ubicloud \
-            --add-host "api.localhost:${APP_IP}" \
-            --entrypoint /app/pg_ubi_avail_replicas \
-            ${{ env.STRESSHOUSE_IMAGE }} \
-            --plugin-config '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}' \
-            > /tmp/ci-logs/e2e-test-retry.log 2>&1 || E2E_EXIT=$?
-          cat /tmp/ci-logs/e2e-test-retry.log
-          exit ${E2E_EXIT:-0}
-
-      - name: Fail if E2E test failed
-        if: steps.e2e_test.outcome == 'failure' && steps.e2e_test_retry.outcome != 'success'
-        run: |
-          echo "E2E test failed on both attempts"
-          exit 1
+      - name: E2E availability replicas (PG18)
+        uses: ./.github/actions/run-stresshouse-test
+        with:
+          name: E2E avail replicas PG18
+          entrypoint: /app/pg_ubi_avail_replicas
+          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237,"pg_version":"18"}'
+          image: ${{ env.STRESSHOUSE_IMAGE }}
+          network: devcontainer_ubicloud
+          api_host: ${{ steps.app_ip.outputs.ip }}
 
       - name: Collect debug info
         if: always()
@@ -252,7 +202,7 @@ jobs:
         run: |
           PROMPT=$(cat <<'EOF'
           You are debugging a failed test in the Ubicloud CI pipeline.
-          The test source is in data-plane-application/stresshouse/tests/experimental/ubicloud/.
+          The test source is in data-plane-application/stresshouse/tests/experimental/postgres/.
           Read the test code to understand what it does before investigating.
 
           ## Available tools
@@ -272,10 +222,9 @@ jobs:
 
           ## Investigation
 
-          Read these log files to understand the failure:
-          - /tmp/ci-logs/smoke-test.log — smoke test attempt output
-          - /tmp/ci-logs/smoke-test-retry.log — smoke test retry output (if exists)
-          - /tmp/ci-logs/e2e-test.log — E2E test attempt output (if smoke passed)
+          List all files in /tmp/ci-logs/ and read them to understand the failure.
+          Test logs are named by test (e.g. smoke-test.log, e2e-avail-replicas-pg17.log).
+          Retry attempts get a -retry2 suffix. Also check:
           - /tmp/ci-logs/foreman.log — Ubicloud foreman (strand runner) logs
           - /tmp/ci-logs/strand-state.log — strand state dump from DB
           - /tmp/ci-logs/docker-compose.log — container logs

@@ -1,0 +1,103 @@
+name: Run Stresshouse Test
+description: Run a stresshouse plugin test with automatic retry on failure
+
+inputs:
+  name:
+    description: Human-readable test name (used in log messages)
+    required: true
+  entrypoint:
+    description: Binary path inside the stresshouse image (e.g. /app/pg_ubi_provision_smoke)
+    required: true
+  plugin_config:
+    description: JSON plugin config string
+    required: true
+  image:
+    description: Stresshouse Docker image name
+    required: true
+  network:
+    description: Docker network to attach to
+    required: true
+  api_host:
+    description: IP address of the API host (for --add-host)
+    required: true
+  log_dir:
+    description: Directory for log files
+    required: false
+    default: /tmp/ci-logs
+  timeout:
+    description: Timeout in minutes per attempt
+    required: false
+    default: "20"
+  max_attempts:
+    description: Maximum number of attempts (1 = no retry)
+    required: false
+    default: "2"
+
+outputs:
+  outcome:
+    description: "success or failure"
+    value: ${{ steps.result.outputs.outcome }}
+  log_file:
+    description: Path to the final log file
+    value: ${{ steps.result.outputs.log_file }}
+
+runs:
+  using: composite
+  steps:
+    - name: ${{ inputs.name }}
+      id: result
+      shell: bash
+      env:
+        TEST_NAME: ${{ inputs.name }}
+        ENTRYPOINT: ${{ inputs.entrypoint }}
+        PLUGIN_CONFIG: ${{ inputs.plugin_config }}
+        IMAGE: ${{ inputs.image }}
+        NETWORK: ${{ inputs.network }}
+        API_HOST: ${{ inputs.api_host }}
+        LOG_DIR: ${{ inputs.log_dir }}
+        TIMEOUT_MIN: ${{ inputs.timeout }}
+        MAX_ATTEMPTS: ${{ inputs.max_attempts }}
+      run: |
+        # Sanitize test name for use in filenames
+        LOG_NAME=$(echo "$TEST_NAME" | tr ' A-Z' '-a-z' | tr -cs 'a-z0-9-' '-')
+        mkdir -p "$LOG_DIR"
+
+        for ATTEMPT in $(seq 1 "$MAX_ATTEMPTS"); do
+          if [ "$ATTEMPT" -eq 1 ]; then
+            LOG_FILE="$LOG_DIR/${LOG_NAME}.log"
+          else
+            LOG_FILE="$LOG_DIR/${LOG_NAME}-retry${ATTEMPT}.log"
+          fi
+
+          echo "::group::${TEST_NAME} (attempt ${ATTEMPT}/${MAX_ATTEMPTS})"
+          echo "Log file: $LOG_FILE"
+
+          EXIT_CODE=0
+          timeout "${TIMEOUT_MIN}m" docker run --rm \
+            --network "$NETWORK" \
+            --add-host "api.localhost:${API_HOST}" \
+            --entrypoint "$ENTRYPOINT" \
+            "$IMAGE" \
+            --plugin-config "$PLUGIN_CONFIG" \
+            > "$LOG_FILE" 2>&1 || EXIT_CODE=$?
+
+          cat "$LOG_FILE"
+          echo "::endgroup::"
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ ${TEST_NAME} passed (attempt ${ATTEMPT})"
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+            echo "log_file=$LOG_FILE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "❌ ${TEST_NAME} failed (attempt ${ATTEMPT}, exit code $EXIT_CODE)"
+
+          if [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; then
+            echo "Retrying..."
+          fi
+        done
+
+        echo "outcome=failure" >> "$GITHUB_OUTPUT"
+        echo "log_file=$LOG_FILE" >> "$GITHUB_OUTPUT"
+        exit 1
