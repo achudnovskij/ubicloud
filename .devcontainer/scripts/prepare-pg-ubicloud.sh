@@ -35,9 +35,6 @@ fi
 # 1. Create default project with private_locations enabled
 "$SCRIPT_DIR/register-pg-project.sh"
 
-# Start foreman (always restart to pick up any config changes)
-"$SCRIPT_DIR/start-foreman.sh" --restart
-
 # 2. GitHub authentication
 echo ""
 echo "=== GitHub CLI authentication ==="
@@ -67,6 +64,10 @@ for REGION in "${REGIONS[@]}"; do
 done
 
 "$SCRIPT_DIR/aws-sso-login.sh"
+
+# Start foreman last so respirate boots with the fully prepared AWS profile,
+# downloaded ~/.aws/config, registered locations, and a valid SSO session.
+"$SCRIPT_DIR/start-foreman.sh" --restart
 
 echo ""
 echo "=== Done ==="
