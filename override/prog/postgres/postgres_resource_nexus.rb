@@ -2,11 +2,9 @@
 
 class Prog::Postgres::PostgresResourceNexus
   module PrependMethods
-    def create_billing_record(billing_rate_id:, amount:)
+    def create_billing_record(billing_rate_id:, amount:, slot:)
       location = postgres_resource.location
 
-      # Flatten tags from [{key: "chc_org_id", value: "org-123"}, ...] into
-      # {"chc_org_id": "org-123", ...} and merge with resource properties
       flattened_tags = (postgres_resource.tags || []).each_with_object({}) do |tag, hash|
         hash[tag["key"]] = tag["value"]
       end
@@ -26,6 +24,7 @@ class Prog::Postgres::PostgresResourceNexus
           flavor: postgres_resource.flavor,
           server_count: postgres_resource.target_server_count,
           storage_size_gib: representative_server.storage_size_gib,
+          slot:,
         }),
       )
     end

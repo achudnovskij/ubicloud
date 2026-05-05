@@ -137,16 +137,16 @@ class Clover
       end
 
       show_actions = if pg.read_replica?
-        %w[overview connection charts networking config settings]
+        %w[overview connection charts networking logs config settings]
       else
-        %w[overview connection charts networking resize high-availability read-replica backup-restore config upgrade settings]
+        %w[overview connection charts networking resize high-availability read-replica backup-restore logs config upgrade settings]
       end
       r.show_object(pg, actions: show_actions, perm: "Postgres:view", template: "postgres/show")
 
       r.post "restart" do
         authorize("Postgres:edit", pg)
         DB.transaction do
-          pg.incr_restart
+          pg.server_incr("restart")
           audit_log(pg, "restart")
         end
 
@@ -258,7 +258,7 @@ class Clover
 
           DB.transaction do
             md = PostgresMetricDestination.create(postgres_resource_id: pg.id, url:, username:, password:)
-            pg.servers.each(&:incr_configure_metrics)
+            pg.server_incr("configure_metrics")
             audit_log(md, "create", pg)
           end
 
@@ -276,7 +276,7 @@ class Clover
           if (md = pg.metric_destinations_dataset[id:])
             DB.transaction do
               md.destroy
-              pg.servers.each(&:incr_configure_metrics)
+              pg.server_incr("configure_metrics")
               audit_log(md, "destroy")
             end
           else
@@ -286,6 +286,79 @@ class Clover
           if web?
             flash["notice"] = "PostgreSQL metric destination deleted."
             r.redirect pg, "/charts"
+          else
+            204
+          end
+        end
+      end
+
+      r.on "log-destination" do
+        r.post true do
+          authorize("Postgres:edit", pg)
+          handle_validation_failure("postgres/show") { @page = "logs" }
+
+          name, type = typecast_params.nonempty_str!(["name", "type"])
+          url = typecast_params.nonempty_str!("url")
+          (type == "otlp") ? Validation.validate_url(url) : Validation.validate_syslog_url(url)
+
+          options = if web?
+            if type == "otlp"
+              keys = typecast_params.array(:str, "header_keys") || []
+              values = typecast_params.array(:str, "header_values") || []
+              result = {}
+              keys.zip(values).each do |key, val|
+                next if key.to_s.empty?
+                result[key] = val.to_s
+              end
+              result.empty? ? nil : {"headers" => result}
+            else
+              sd_ids = typecast_params.array(:str, "structured_data_ids") || []
+              sd_keys = typecast_params.array(:str, "structured_data_keys") || []
+              sd_values = typecast_params.array(:str, "structured_data_values") || []
+              result = {}
+              sd_ids.zip(sd_keys, sd_values).each do |id, key, val|
+                next if id.to_s.empty? || key.to_s.empty?
+                (result[id] ||= {})[key] = val.to_s
+              end
+              result.empty? ? nil : {"structured_data" => result}
+            end
+          else
+            opts = typecast_params.Hash("options")
+            Validation.validate_log_destination_options(type, opts)
+            opts
+          end
+
+          ld = DB.transaction do
+            ld = PostgresLogDestination.create(postgres_resource_id: pg.id, name:, type:, url:, options:)
+            pg.server_incr("configure_logs")
+            audit_log(ld, "create", pg)
+            ld
+          end
+
+          if api?
+            {id: ld.ubid, name: ld.name, type: ld.type, url: ld.url}
+          else
+            flash["notice"] = "Log destination is created"
+            r.redirect pg, "/logs"
+          end
+        end
+
+        r.delete :ubid_uuid do |id|
+          authorize("Postgres:edit", pg)
+
+          if (ld = pg.log_destinations_dataset[id:])
+            DB.transaction do
+              ld.destroy
+              pg.server_incr("configure_logs")
+              audit_log(ld, "destroy")
+            end
+          else
+            no_audit_log
+          end
+
+          if web?
+            flash["notice"] = "PostgreSQL log destination deleted."
+            r.redirect pg, "/logs"
           else
             204
           end
@@ -533,7 +606,7 @@ class Clover
               .exclude(cert_auth_users.contains([name]))
               .update(cert_auth_users: cert_auth_users.concat([name]))
             if n == 1
-              pg.servers.each(&:incr_configure)
+              pg.server_incr("configure")
               audit_log(pg, "add_cert_auth_user")
               pg.refresh
             else
@@ -551,7 +624,7 @@ class Clover
               .where(cert_auth_users.contains([name]))
               .update(cert_auth_users: cert_auth_users - name)
             if n == 1
-              pg.servers.each(&:incr_configure)
+              pg.server_incr("configure")
               audit_log(pg, "remove_cert_auth_user")
               pg.refresh
             else
@@ -591,10 +664,10 @@ class Clover
         authorize("Postgres:view", pg)
 
         start_time, end_time = typecast_params.str(%w[start end])
-        start_time ||= (DateTime.now.new_offset(0) - 30.0 / 1440).rfc3339
+        start_time ||= (Time.now.utc - 60 * 30).xmlschema
         start_time = Validation.validate_rfc3339_datetime_str(start_time, "start")
 
-        end_time ||= DateTime.now.new_offset(0).rfc3339
+        end_time ||= Time.now.utc.xmlschema
         end_time = Validation.validate_rfc3339_datetime_str(end_time, "end")
 
         start_ts = start_time.to_i
@@ -709,7 +782,7 @@ class Clover
           old_pg_config = pg.user_config
           pg.update(user_config: pg_config, pgbouncer_user_config: pgbouncer_config)
 
-          pg.servers.each(&:incr_configure)
+          pg.server_incr("configure")
 
           audit_log(pg, "update_config")
 

@@ -557,6 +557,50 @@ RSpec.describe Clover, "postgres" do
         expect(JSON.parse(last_response.body)["error"]["details"]["url"]).to eq("Invalid URL scheme. Only https URLs are supported.")
       end
 
+      it "log-destination (syslog)" do
+        post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination", {
+          name: "graylog",
+          type: "syslog",
+          url: "tcp://logs.example.com:6514",
+        }.to_json
+
+        expect(last_response.status).to eq(200)
+        expect(JSON.parse(last_response.body)).to include("type" => "syslog", "url" => "tcp://logs.example.com:6514")
+      end
+
+      it "log-destination (otlp)" do
+        post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination", {
+          name: "nr",
+          type: "otlp",
+          url: "https://otlp.nr-data.net",
+        }.to_json
+
+        expect(last_response.status).to eq(200)
+        expect(JSON.parse(last_response.body)).to include("type" => "otlp", "url" => "https://otlp.nr-data.net")
+      end
+
+      it "log-destination invalid syslog port" do
+        post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination", {
+          name: "graylog",
+          type: "syslog",
+          url: "tcp://logs.example.com:99999",
+        }.to_json
+
+        expect(last_response.status).to eq(400)
+        expect(JSON.parse(last_response.body)["error"]["details"]["url"]).to eq("port must be between 1 and 65535")
+      end
+
+      it "log-destination invalid otlp url scheme" do
+        post "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination", {
+          name: "graylog",
+          type: "otlp",
+          url: "http://insecure.example.com",
+        }.to_json
+
+        expect(last_response.status).to eq(400)
+        expect(JSON.parse(last_response.body)["error"]["details"]["url"]).to eq("Invalid URL scheme. Only https URLs are supported.")
+      end
+
       it "restore" do
         backup = Struct.new(:key, :last_modified)
         restore_target = Time.now.utc
@@ -766,8 +810,8 @@ RSpec.describe Clover, "postgres" do
 
       it "fails when end timestamp is before start timestamp" do
         query_params = {
-          start: (DateTime.now.new_offset(0) - 1).rfc3339,
-          end: (DateTime.now.new_offset(0) - 2).rfc3339,
+          start: (Time.now.utc - 60 * 60 * 24).xmlschema,
+          end: (Time.now.utc - 60 * 60 * 24 * 2).xmlschema,
         }
 
         query_str = URI.encode_www_form(query_params)
@@ -778,8 +822,8 @@ RSpec.describe Clover, "postgres" do
 
       it "fails when time range is too large" do
         query_params = {
-          start: (DateTime.now.new_offset(0) - 32).rfc3339,
-          end: DateTime.now.new_offset(0).rfc3339,
+          start: (Time.now.utc - 60 * 60 * 24 * 32).xmlschema,
+          end: Time.now.utc.xmlschema,
         }
         query_str = URI.encode_www_form(query_params)
 
@@ -790,8 +834,8 @@ RSpec.describe Clover, "postgres" do
 
       it "fails when start timestamp is too old" do
         query_params = {
-          start: (DateTime.now.new_offset(0) - 32).rfc3339,
-          end: (DateTime.now.new_offset(0) - 31).rfc3339,
+          start: (Time.now.utc - 60 * 60 * 24 * 32).xmlschema,
+          end: (Time.now.utc - 60 * 60 * 24 * 31).xmlschema,
         }
         query_str = URI.encode_www_form(query_params)
 
@@ -1086,6 +1130,25 @@ RSpec.describe Clover, "postgres" do
 
       it "metric-destination not exist" do
         delete "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/metric-destination/et000000000000000000000000"
+
+        expect(last_response.status).to eq(204)
+      end
+
+      it "log-destination" do
+        ld = PostgresLogDestination.create(
+          postgres_resource_id: pg.id,
+          name: "graylog",
+          type: "syslog",
+          url: "tcp://logs.example.com:6514",
+        )
+        delete "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination/#{ld.ubid}"
+
+        expect(last_response.status).to eq(204)
+        expect(PostgresLogDestination[ld.id]).to be_nil
+      end
+
+      it "log-destination not exist" do
+        delete "/project/#{project.ubid}/location/#{pg.display_location}/postgres/#{pg.name}/log-destination/1d000000000000000000000000"
 
         expect(last_response.status).to eq(204)
       end

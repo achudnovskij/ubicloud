@@ -52,6 +52,12 @@ RUN apt-get update --fix-missing && apt-get install -y --no-install-recommends \
 RUN ARCH=$(uname -m) && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${ARCH}.zip" -o /tmp/awscliv2.zip \
     && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
 
+# Install otelcol-contrib (arch-aware) for spec/overrides/prog/postgres/postgres_server_nexus_spec.rb
+ARG OTEL_VERSION=0.146.0
+RUN ARCH=$(uname -m) && case "$ARCH" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; esac \
+    && curl -fsSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_${ARCH}.tar.gz" \
+        | tar xz -C /usr/local/bin otelcol-contrib
+
 # Create non-root vscode user
 RUN useradd -m -s /bin/bash vscode \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers

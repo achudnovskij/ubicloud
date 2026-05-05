@@ -16,6 +16,12 @@ class CloverAdmin < Roda
     TableLink.new(...)
   end
 
+  TableFormButton = Data.define(:text, :attributes)
+
+  def table_form_button(text, **attributes)
+    TableFormButton.new(text, attributes)
+  end
+
   Unreloader.record_dependency("lib/audit_log.rb", __FILE__)
 
   MIN_AUDIT_LOG_END_DATE = Date.new(2025, 6)
@@ -102,6 +108,7 @@ class CloverAdmin < Roda
 
   plugin :symbol_matchers
   symbol_matcher(:ubid, /([a-tv-z0-9]{26})/)
+  symbol_matcher(:ubid_uuid, :ubid) { UBID.to_uuid(it) }
 
   plugin :not_found do
     raise "admin route not handled: #{request.path}" if Config.test? && !ENV["DONT_RAISE_ADMIN_ERRORS"]
@@ -336,7 +343,9 @@ class CloverAdmin < Roda
       "resolve" => object_action("Resolve", flash: "Resolve scheduled for Page", &:incr_resolve),
     },
     "PostgresResource" => {
-      "restart" => object_action("Restart", flash: "Restart scheduled for PostgresResource", &:incr_restart),
+      "restart" => object_action("Restart", flash: "Restart scheduled for PostgresResource") do |obj|
+        obj.server_incr("restart")
+      end,
     },
     "PostgresServer" => {
       "recycle" => object_action("Recycle", flash: "Recycle scheduled for PostgresServer", &:incr_recycle),
@@ -456,6 +465,28 @@ class CloverAdmin < Roda
       }) do |obj, target_location_id|
         obj.move_to_location(target_location_id)
       end,
+      "force_create_vm" => object_action("Force Create VM", flash: "VM creation scheduled", params: ->(obj) {
+        {
+          project_id: {typecast: :ubid_uuid!, required: true, placeholder: "Project UBID"},
+          public_key: {typecast: :nonempty_str!, required: true},
+          name: {typecast: :nonempty_str, required: nil, placeholder: "auto-generated if blank"},
+          size: {
+            typecast: :nonempty_str!,
+            type: "select",
+            required: true,
+            options: Option::VmSizes.select { it.arch == obj.arch && (it.family == obj.family || (it.family == "burstable" && obj.accepts_slices)) }.map(&:name),
+          },
+          boot_image: {
+            typecast: :nonempty_str!,
+            type: "select",
+            required: true,
+            options: obj.boot_images_dataset.exclude(activated_at: nil).distinct.select_order_map(:name),
+          },
+        }
+      }) do |obj, project_id, public_key, name, size, boot_image|
+        Prog::Vm::Nexus.assemble(public_key, project_id, name:, size:, boot_image:,
+          location_id: obj.location_id, arch: obj.arch, force_host_id: obj.id, enable_ip4: true)
+      end,
     },
   }.freeze
   OBJECT_ACTIONS.each_value(&:freeze)
@@ -493,6 +524,12 @@ class CloverAdmin < Roda
     ["PostgresResource", :servers] => "resource",
     ["VmHost", :boot_images] => "vm_host",
   }.freeze
+
+  LOCAL_E2E_PROGS = Prog::Test::LocalE2eLoop::ALLOWED_PROGS
+  LOCAL_E2E_PROVIDERS = %w[
+    aws
+    metal
+  ].freeze
 
   plugin :autoforme do
     # :nocov:
@@ -1040,6 +1077,56 @@ class CloverAdmin < Roda
       view("authentication_audit_log")
     end
 
+    r.on "local-e2e" do
+      strand_ds = Strand.where(Sequel.like(:prog, "Test::%"))
+
+      r.is do
+        r.get do
+          @strands = strand_ds.order(:prog, :id).eager(:semaphores).all
+          view("local_e2e")
+        end
+
+        r.post do
+          provider = typecast_params.nonempty_str("provider")
+          raise "invalid local E2E provider" unless LOCAL_E2E_PROVIDERS.include?(provider)
+          progs = typecast_params.array!(:nonempty_str, "progs")
+
+          sts = if typecast_params.bool("loop")
+            [Prog::Test::LocalE2eLoop.assemble(provider:, progs:)]
+          else
+            progs.map do |prog|
+              Prog::Test::LocalE2eLoop.check_prog(prog)
+              Prog::Test.const_get(prog).assemble(provider:, local_e2e: true)
+            end
+          end
+
+          flash["notice"] = "Started local E2E strand(s): #{sts.map(&:ubid).join(" ")}"
+          r.redirect
+        end
+      end
+
+      r.post %w[pause unpause destroy].freeze, :ubid_uuid do |action, strand_id|
+        unless (strand = strand_ds.with_pk(strand_id))
+          flash["error"] = "Strand not found, it was probably already deleted"
+          r.redirect "/local-e2e"
+        end
+
+        prog = strand.prog.split("::").last
+        raise "invalid strand" unless LOCAL_E2E_PROGS.include?(prog) || prog == "LocalE2eLoop"
+
+        case action
+        when "pause", "destroy"
+          Semaphore.incr(strand.id, action)
+        else # unpause
+          Semaphore.where(strand_id: strand.id, name: "pause").destroy
+          strand.this.update(schedule: Sequel::CURRENT_TIMESTAMP)
+        end
+
+        flash["notice"] = "Strand #{strand.ubid} #{action}#{"e" if action == "destroy"}d"
+        r.redirect "/local-e2e"
+      end
+    end
+
     r.get "admin-list" do
       @admins = DB[:admin_account].select_order_map(:login)
       view("admin_list")
@@ -1065,13 +1152,28 @@ class CloverAdmin < Roda
       premium_sizes = [2, 4, 8, 16, 30]
       alien_sizes = [2, 4, 8, 16]
 
+      quota_default = ProjectQuota.default_quotas[(@arch == "arm64") ? "GithubRunnerVCpuArm" : "GithubRunnerVCpu"]
+      quota_expr = Sequel.function(
+        :coalesce,
+        Sequel[:pq][:value],
+        Sequel.case(
+          {"new" => quota_default["new_value"], "verified" => quota_default["verified_value"], "limited" => quota_default["limited_value"]},
+          nil,
+          Sequel[:p][:reputation],
+        ),
+      )
+
       @data = DB.from(runners.as(:r))
         .left_join(Sequel[:github_installation].as(:i), id: Sequel[:r][:installation_id])
+        .left_join(Sequel[:project].as(:p), id: Sequel[:i][:project_id])
+        .left_join(Sequel[:project_quota].as(:pq), project_id: Sequel[:p][:id], quota_id: quota_default["id"])
         .left_join(Sequel[:vm].as(:v), id: Sequel[:r][:vm_id])
         .select(
           Sequel[:i][:id],
           Sequel[:i][:name],
-          Sequel.pg_jsonb(Sequel[:i][:allocator_preferences]).get("family_filter").contains(["premium"]).as(:premium),
+          Sequel.pg_jsonb(Sequel[:i][:allocator_preferences]).get("family_filter").contains(["premium"]).as(:prem),
+          Sequel.cast(Sequel.pg_jsonb_op(Sequel[:p][:feature_flags]).get_text("spill_to_alien_runners"), :boolean).as(:spill),
+          quota_expr.as(:quota),
         )
         .select_append(
           *standard_sizes.map { count_f.call(r_vcpus => it).as(:"r#{it}") },
@@ -1085,9 +1187,16 @@ class CloverAdmin < Roda
           *premium_sizes.map { count_f.call(v_family => "premium", v_vcpus => it).as(:"p#{it}") },
           *alien_sizes.map { count_f.call(v_family.like("m%") & Sequel.expr(v_vcpus => it)).as(:"a#{it}") },
         )
-        .group(Sequel[:i][:id], Sequel[:i][:name], :premium)
+        .group(Sequel[:i][:id], Sequel[:i][:name], :prem, :spill, :quota)
         .reverse(:runner_vcpus, :vm_vcpus)
         .all
+
+      @family_utilization = VmHost.where(allocation_state: "accepting", location_id: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID], arch: @arch)
+        .select_group(:family)
+        .select_append { round(sum(:used_cores) * 100.0 / sum(:total_cores), 2).cast(:float).as(:utilization) }
+        .to_hash(:family, :utilization)
+
+      @spilled_vcpus = Vm.where(arch: @arch, boot_image: Prog::Github::GithubRunnerNexus::AWS_AMI_VERSIONS).sum(:vcpus) || 0
 
       view("github_runner_usage")
     end

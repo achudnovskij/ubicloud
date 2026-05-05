@@ -102,9 +102,22 @@ RSpec.describe Prog::Test::HetznerServer do
       expect { hs_test.wait_setup_host }.to nap(15)
     end
 
-    it "hops to install_integration_specs if the host is ready" do
+    it "hops to verify_encrypted_swap if the host is ready" do
       vm_host.strand.update(label: "wait")
-      expect { hs_test.wait_setup_host }.to hop("install_integration_specs")
+      expect { hs_test.wait_setup_host }.to hop("verify_encrypted_swap")
+    end
+  end
+
+  describe "#verify_encrypted_swap" do
+    it "hops to install_integration_specs if swap is on dm-crypt" do
+      expect(hs_test.vm_host.sshable).to receive(:_cmd).with("swapon --show=NAME --noheadings").and_return("/dev/dm-0\n")
+      expect { hs_test.verify_encrypted_swap }.to hop("install_integration_specs")
+    end
+
+    it "fails if swap is not on dm-crypt" do
+      expect(hs_test.vm_host.sshable).to receive(:_cmd).with("swapon --show=NAME --noheadings").and_return("/dev/nvme0n1p2\n")
+      expect(hs_test.strand).to receive(:update).with(hash_including(exitval: {msg: "swap is not on a dm-crypt device: /dev/nvme0n1p2"}))
+      expect { hs_test.verify_encrypted_swap }.to hop("failed")
     end
   end
 
@@ -165,21 +178,8 @@ RSpec.describe Prog::Test::HetznerServer do
       expect { hs_test.wait }.to hop("verify_cleanup")
     end
 
-    it "hops to disallow_slices when signaled" do
-      hs_test.incr_disallow_slices
-      expect { hs_test.wait }.to hop("disallow_slices")
-    end
-
     it "naps" do
       expect { hs_test.wait }.to nap(15)
-    end
-  end
-
-  describe "#disallow_slices" do
-    it "disallows slices" do
-      vm_host.update(accepts_slices: true)
-      expect { hs_test.disallow_slices }.to hop("wait")
-      expect(vm_host.reload.accepts_slices).to be(false)
     end
   end
 

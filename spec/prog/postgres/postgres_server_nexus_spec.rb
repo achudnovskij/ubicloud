@@ -148,46 +148,37 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
   end
 
   describe "#before_run" do
-    it "hops to destroy when needed" do
+    it "hops to destroy when resource is gone" do
       nx.incr_destroy
       postgres_server.resource.destroy
       expect { nx.before_run }.to hop("destroy")
     end
 
-    it "does not hop to destroy if already in the destroy state" do
+    it "hops to destroy when resource is destroying" do
       nx.incr_destroy
-      postgres_server.resource.strand.destroy
-      nx.strand.update(label: "destroy")
-      expect { nx.before_run }.not_to hop("destroy")
+      postgres_server.resource.incr_destroying
+      expect { nx.before_run }.to hop("destroy")
     end
 
-    it "does not hop to destroy if already in the wait_children_destroy state" do
+    it "cancels the destroy if the server is the representative of an alive resource" do
       nx.incr_destroy
-      postgres_server.resource.strand.destroy
-      nx.strand.update(label: "wait_children_destroy")
       expect { nx.before_run }.not_to hop("destroy")
-    end
-
-    it "does not hop to destroy if already in the destroy_vm_and_pg state" do
-      nx.incr_destroy
-      postgres_server.resource.strand.destroy
-      nx.strand.update(label: "destroy_vm_and_pg")
-      expect { nx.before_run }.not_to hop("destroy")
+      expect(Semaphore.where(strand_id: postgres_server.id, name: "destroy").count).to eq(0)
     end
 
     it "cancels the destroy if the server is picked up for take over" do
       nx.incr_destroy
+      postgres_server.update(is_representative: false)
       expect(nx.postgres_server).to receive(:taking_over?).and_return(true)
       expect { nx.before_run }.not_to hop("destroy")
       expect(Semaphore.where(strand_id: postgres_server.id, name: "destroy").count).to eq(0)
     end
 
-    it "pops additional operations from stack" do
-      postgres_server.resource.strand.update(label: "destroy")
-      nx.strand.update(label: "destroy", stack: [{"link" => ["Postgres::PostgresServerNexus", "wait"]}, {}])
-      fresh_nx = described_class.new(Strand[postgres_server.id])
-      fresh_nx.incr_destroy
-      expect { fresh_nx.before_run }.to hop("wait")
+    it "does not hop to destroy if already destroying" do
+      nx.incr_destroy
+      nx.incr_destroying
+      postgres_server.update(is_representative: false)
+      expect { nx.before_run }.not_to hop("destroy")
     end
   end
 
@@ -466,7 +457,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       standby_nx = create_standby_nexus
       standby_sshable = standby_nx.postgres_server.vm.sshable
       expect(standby_sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("InProgress")
-      expect(standby_sshable).to receive(:_cmd).with("df --output=used /dat | tail -n 1").and_return("1024000\n")
+      expect(standby_nx.postgres_server).to receive(:data_disk_usage).and_return(1024000)
       expect(standby_nx).to receive(:register_deadline).with("wait", 10 * 60, allow_extension: 24 * 60 * 60)
       expect { standby_nx.initialize_database_from_backup }.to nap(5)
       expect(frame_value(standby_nx, "disk_usage")).to eq(1024000)
@@ -477,18 +468,10 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       standby_sshable = standby_nx.postgres_server.vm.sshable
       refresh_frame(standby_nx, new_values: {"disk_usage" => 2048000})
       expect(standby_sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("InProgress")
-      expect(standby_sshable).to receive(:_cmd).with("df --output=used /dat | tail -n 1").and_return("2048000\n")
+      expect(standby_nx.postgres_server).to receive(:data_disk_usage).and_return(2048000)
       expect(standby_nx).not_to receive(:register_deadline)
       expect { standby_nx.initialize_database_from_backup }.to nap(5)
       expect(frame_value(standby_nx, "disk_usage")).to eq(2048000)
-    end
-
-    it "handles disk usage check failure gracefully during InProgress" do
-      standby_nx = create_standby_nexus
-      standby_sshable = standby_nx.postgres_server.vm.sshable
-      expect(standby_sshable).to receive(:_cmd).with("common/bin/daemonizer2 check initialize_database_from_backup").and_return("InProgress")
-      expect(standby_sshable).to receive(:_cmd).with("df --output=used /dat | tail -n 1").and_raise(RuntimeError)
-      expect { standby_nx.initialize_database_from_backup }.to nap(5)
     end
 
     it "increments try count on Failed" do
@@ -589,7 +572,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now pg-collect-metrics.timer")
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now otelcol-contrib")
 
-      expect { nx.configure_metrics }.to hop("setup_hugepages")
+      expect { nx.configure_metrics }.to hop("configure_logs")
     end
 
     it "configures prometheus and metrics during initial provisioning without otel when disabled" do
@@ -618,7 +601,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now postgres-metrics.timer")
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now pg-collect-metrics.timer")
 
-      expect { nx.configure_metrics }.to hop("setup_hugepages")
+      expect { nx.configure_metrics }.to hop("configure_logs")
     end
 
     it "configures prometheus and metrics during initial provisioning and hops to setup_cloudwatch if timeline is AWS" do
@@ -661,7 +644,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(sshable).to receive(:_cmd).with("sudo systemctl enable --now otelcol-contrib")
 
       nx.postgres_server.resource.project.set_ff_aws_cloudwatch_logs(true)
-      expect { nx.configure_metrics }.to hop("setup_cloudwatch")
+      expect { nx.configure_metrics }.to hop("configure_logs")
     end
 
     it "configures prometheus and metrics and hops to wait at times other than initial provisioning" do
@@ -839,6 +822,49 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_sshable).to receive(:_cmd).with("sudo systemctl reload otelcol-contrib || sudo systemctl restart otelcol-contrib")
 
       expect { standby_nx.configure_metrics }.to hop("wait")
+    end
+  end
+
+  describe "#configure_logs" do
+    let(:logs_config) { {instance: "pg123", server_role: "primary", version: "17", log_destinations: []} }
+
+    before do
+      allow(nx.postgres_server).to receive(:logs_config).and_return(logs_config)
+    end
+
+    it "runs configure-logs when NotStarted" do
+      expect(sshable).to receive(:d_check).with("configure_logs").and_return("NotStarted")
+      expect(sshable).to receive(:d_run).with("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: logs_config.to_json)
+      expect { nx.configure_logs }.to nap(5)
+    end
+
+    it "naps while InProgress" do
+      expect(sshable).to receive(:d_check).with("configure_logs").and_return("InProgress")
+      expect { nx.configure_logs }.to nap(5)
+    end
+
+    it "hops to setup_hugepages after success during initial provisioning" do
+      nx.incr_initial_provisioning
+      expect(sshable).to receive(:d_check).with("configure_logs").and_return("Succeeded")
+      expect(sshable).to receive(:d_clean).with("configure_logs")
+      expect { nx.configure_logs }.to hop("setup_hugepages")
+    end
+
+    it "hops to setup_cloudwatch after success during initial provisioning if timeline is AWS" do
+      nx.incr_initial_provisioning
+      nx.postgres_server.resource.project.set_ff_aws_cloudwatch_logs(true)
+      aws_location = Location.create(name: "us-west-2", display_name: "aws-us-west-2", ui_name: "aws-us-west-2", visible: true, provider: "aws")
+      aws_timeline = create_postgres_timeline(location_id: aws_location.id)
+      server.update(timeline: aws_timeline)
+      expect(sshable).to receive(:d_check).with("configure_logs").and_return("Succeeded")
+      expect(sshable).to receive(:d_clean).with("configure_logs")
+      expect { nx.configure_logs }.to hop("setup_cloudwatch")
+    end
+
+    it "hops to wait after success outside of initial provisioning" do
+      expect(sshable).to receive(:d_check).with("configure_logs").and_return("Succeeded")
+      expect(sshable).to receive(:d_clean).with("configure_logs")
+      expect { nx.configure_logs }.to hop("wait")
     end
   end
 
@@ -1066,19 +1092,39 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
   describe "#wait_catch_up" do
     it "naps if the lag is too high and extends deadline when lsn progresses" do
       expect(server).to receive(:lsn_caught_up).and_return(false)
-      expect(server).to receive(:current_lsn).and_return("0/1000000")
+      expect(server).to receive(:last_known_lsn).and_return("0/1000000")
       expect(nx).to receive(:register_deadline).with("wait", 10 * 60, allow_extension: 24 * 60 * 60)
       expect { nx.wait_catch_up }.to nap(30)
-      expect(nx.strand.stack.first["current_lsn"]).to eq("0/1000000")
+      expect(nx.strand.stack.first["previous_lsn"]).to eq("0/1000000")
     end
 
     it "naps without extending deadline when lsn has not progressed" do
-      nx.strand.stack.first["current_lsn"] = "0/1000000"
+      nx.strand.stack.first["previous_lsn"] = "0/1000000"
       nx.strand.modified!(:stack)
       nx.strand.save_changes
       expect(server).to receive(:lsn_caught_up).and_return(false)
-      expect(server).to receive(:current_lsn).and_return("0/1000000")
+      expect(server).to receive(:last_known_lsn).and_return("0/1000000")
       expect(server).to receive(:lsn_diff).with("0/1000000", "0/1000000").and_return(0)
+      expect(nx).not_to receive(:register_deadline)
+      expect { nx.wait_catch_up }.to nap(30)
+    end
+
+    it "extends deadline based on disk growth when no lsn has been recorded yet" do
+      expect(server).to receive(:lsn_caught_up).and_return(false)
+      expect(server).to receive(:last_known_lsn).and_return(nil)
+      expect(server).to receive(:data_disk_usage).and_return(1024)
+      expect(nx).to receive(:register_deadline).with("wait", 10 * 60, allow_extension: 24 * 60 * 60)
+      expect { nx.wait_catch_up }.to nap(30)
+      expect(nx.strand.stack.first["previous_disk_usage"]).to eq(1024)
+    end
+
+    it "naps without extending deadline when no lsn is available and disk has not grown" do
+      nx.strand.stack.first["previous_disk_usage"] = 1024
+      nx.strand.modified!(:stack)
+      nx.strand.save_changes
+      expect(server).to receive(:lsn_caught_up).and_return(false)
+      expect(server).to receive(:last_known_lsn).and_return(nil)
+      expect(server).to receive(:data_disk_usage).and_return(1024)
       expect(nx).not_to receive(:register_deadline)
       expect { nx.wait_catch_up }.to nap(30)
     end
@@ -1230,6 +1276,11 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       nx.incr_promote_read_replica
       expect(nx).to receive(:register_deadline).with("wait", 10 * 60)
       expect { nx.wait }.to hop("promote_read_replica")
+    end
+
+    it "hops to configure_logs if configure_logs is set" do
+      nx.incr_configure_logs
+      expect { nx.wait }.to hop("configure_logs")
     end
 
     it "hops to configure if configure is set" do

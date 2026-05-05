@@ -429,7 +429,9 @@ RSpec.describe Clover, "auth" do
 
         expect(page).to have_flash_notice("An email has been sent to you with a link to verify your login change")
         expect(Mail::TestMailer.deliveries.length).to eq 1
-        verify_link = Mail::TestMailer.deliveries.first.html_part.body.match(/(\/verify-login-change.+?)"/)[1]
+        mail = Mail::TestMailer.deliveries.first
+        expect(mail.to).to eq [new_email]
+        verify_link = mail.html_part.body.match(/(\/verify-login-change.+?)"/)[1]
 
         click_button "Log out" unless logged_in
         visit verify_link
@@ -1164,6 +1166,21 @@ RSpec.describe Clover, "auth" do
       expect(AccountIdentity.count).to eq(1)
       expect(page.status_code).to eq(200)
       expect(page.title).to eq("Ubicloud - Default Dashboard")
+      expect(audit_log_hash).to eq({"login" => ip_hash("via" => "Google")})
+    end
+
+    it "can login existing account after its email has been changed" do
+      mock_provider(:google)
+      account = create_account
+      account.add_identity(provider: "google", uid: "123456790")
+      account.update(email: "renamed@example.com")
+      account.projects.first.update(name: "Renamed")
+      create_account("user@example.com")
+
+      visit "/login"
+      click_button "Google"
+
+      expect(page.title).to eq("Ubicloud - Renamed Dashboard")
       expect(audit_log_hash).to eq({"login" => ip_hash("via" => "Google")})
     end
 

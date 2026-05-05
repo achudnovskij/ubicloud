@@ -3,7 +3,7 @@
 require_relative "../../lib/util"
 
 class Prog::Test::HetznerServer < Prog::Test::Base
-  semaphore :verify_cleanup_and_destroy, :disallow_slices
+  semaphore :verify_cleanup_and_destroy
 
   def self.assemble(vm_host_id: nil, default_boot_images: [])
     frame = if vm_host_id
@@ -80,6 +80,13 @@ class Prog::Test::HetznerServer < Prog::Test::Base
     end
     update_stack({"available_storage_gib" => vm_host.available_storage_gib})
 
+    hop_verify_encrypted_swap
+  end
+
+  label def verify_encrypted_swap
+    sshable = vm_host.sshable
+    swap_device = sshable.cmd("swapon --show=NAME --noheadings").strip
+    fail_test "swap is not on a dm-crypt device: #{swap_device}" unless swap_device.start_with?("/dev/dm-")
     hop_install_integration_specs
   end
 
@@ -118,18 +125,7 @@ class Prog::Test::HetznerServer < Prog::Test::Base
       hop_verify_cleanup
     end
 
-    when_disallow_slices_set? do
-      hop_disallow_slices
-    end
-
     nap 15
-  end
-
-  label def disallow_slices
-    vm_host.disallow_slices
-    decr_disallow_slices
-
-    hop_wait
   end
 
   label def verify_cleanup

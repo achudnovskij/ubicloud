@@ -140,10 +140,14 @@ RSpec.describe PostgresServer do
       expect(postgres_server.configure_hash[:configs]).to include("shared_preload_libraries" => "'pg_cron,pg_stat_statements,lantern_extras'")
     end
 
+    it "sets log_line_prefix for all instances" do
+      expect(postgres_server.configure_hash[:configs]).to include("log_line_prefix" => "'%m [%p:%l] (%x,%v): host=%r,db=%d,user=%u,app=%a,client=%h '")
+    end
+
     it "puts extra logging options for AWS" do
       location.update(provider: "aws")
       postgres_server.timeline_access = "push"
-      expect(postgres_server.configure_hash[:configs]).to include(:log_line_prefix, :log_connections, :log_disconnections)
+      expect(postgres_server.configure_hash[:configs]).to include(:log_connections, :log_disconnections)
     end
 
     it "sets allow_alter_system to off for version >= 17" do
@@ -233,12 +237,7 @@ RSpec.describe PostgresServer do
       expect(postgres_server.failover_target.ubid).to eq("pgubidstandby3")
     end
 
-    it "returns nil if last_known_lsn in unknown for async replication" do
-      expect(resource).to receive(:ha_type).and_return(PostgresResource::HaType::ASYNC)
-      expect(postgres_server.failover_target).to be_nil
-    end
-
-    it "returns nil if no lsn_monitor for async replication" do
+    it "returns nil when last_known_lsn is unknown for async replication" do
       resource.update(ha_type: PostgresResource::HaType::ASYNC)
       expect(postgres_server.failover_target).to be_nil
     end
@@ -421,7 +420,7 @@ RSpec.describe PostgresServer do
 
       resource.update(parent: parent_resource)
       postgres_server.update(timeline_access: "fetch")
-      allow(resource.parent.representative_server).to receive(:current_lsn).and_return("F/F")
+      allow(resource.parent.representative_server).to receive(:last_known_lsn).and_return("F/F")
     end
 
     it "returns true immediately for primary" do
@@ -430,15 +429,15 @@ RSpec.describe PostgresServer do
     end
 
     it "returns true if the diff is less than 80MB" do
-      expect(postgres_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("F/F")
+      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
       expect(postgres_server.lsn_caught_up).to be_truthy
     end
 
     it "returns true if read replica and the parent representative server is nil" do
       postgres_server.resource.representative_server.update(is_representative: false)
       postgres_server.resource.update(restore_target: Time.now)
-      expect(postgres_server.resource.representative_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("F/F")
-      expect(postgres_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("F/F")
+      expect(postgres_server.resource.representative_server).to receive(:last_known_lsn).and_return("F/F")
+      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
       expect(postgres_server.lsn_caught_up).to be_truthy
     end
 
@@ -449,22 +448,50 @@ RSpec.describe PostgresServer do
     end
 
     it "returns false if the diff is more than 80MB" do
-      expect(postgres_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("1/00000000")
+      expect(postgres_server).to receive(:last_known_lsn).and_return("1/00000000")
       expect(postgres_server.lsn_caught_up).to be_falsey
     end
 
     it "returns true if the diff is less than 80MB for not read replica and uses the main representative server" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
+      expect(postgres_server).to receive(:read_replica?).and_return(false).at_least(:once)
       resource.update(restore_target: Time.now)
-      expect(postgres_server.resource.representative_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("F/F")
-      expect(postgres_server).to receive(:_run_query).with("SELECT pg_last_wal_replay_lsn()").and_return("F/F")
+      expect(postgres_server.resource.representative_server).to receive(:last_known_lsn).and_return("F/F")
+      expect(postgres_server).to receive(:last_known_lsn).and_return("F/F")
       expect(postgres_server.lsn_caught_up).to be_truthy
     end
 
-    it "returns true when no representative server" do
-      expect(postgres_server).to receive(:read_replica?).and_return(false)
-      postgres_server.update(is_representative: false)
-      expect(postgres_server.lsn_caught_up).to be(true)
+    it "returns false when the parent has no recorded lsn yet" do
+      expect(resource.parent.representative_server).to receive(:last_known_lsn).and_return(nil)
+      expect(postgres_server.lsn_caught_up).to be_falsey
+    end
+
+    it "returns false when self has no recorded lsn yet" do
+      expect(postgres_server).to receive(:last_known_lsn).and_return(nil)
+      expect(postgres_server.lsn_caught_up).to be_falsey
+    end
+  end
+
+  describe "#last_known_lsn" do
+    it "returns the value recorded by the monitor" do
+      postgres_server.update_last_known_lsn("1/1234")
+      expect(postgres_server.last_known_lsn).to eq("1/1234")
+      postgres_server.lsn_monitor_ds.delete
+    end
+
+    it "returns nil when no pulse has been recorded" do
+      expect(postgres_server.last_known_lsn).to be_nil
+    end
+  end
+
+  describe "#data_disk_usage" do
+    it "returns the used 1K blocks reported by df on /dat" do
+      expect(postgres_server.vm.sshable).to receive(:_cmd).with("df --output=used /dat | tail -n 1").and_return("1024000\n")
+      expect(postgres_server.data_disk_usage).to eq(1024000)
+    end
+
+    it "returns 0 when the ssh command fails" do
+      expect(postgres_server.vm.sshable).to receive(:_cmd).with("df --output=used /dat | tail -n 1").and_raise(RuntimeError)
+      expect(postgres_server.data_disk_usage).to eq(0)
     end
   end
 
@@ -1301,6 +1328,33 @@ RSpec.describe PostgresServer do
     it "returns updating for refresh_certificates label" do
       postgres_server.strand.update(label: "refresh_certificates")
       expect(postgres_server.display_state).to eq("updating")
+    end
+  end
+
+  describe "#logs_config" do
+    it "returns config with resource_id, instance, server_role, version, and empty destinations" do
+      config = postgres_server.logs_config
+      expect(config[:instance]).to eq(postgres_server.ubid)
+      expect(config[:server_role]).to eq("primary")
+      expect(config[:version]).to eq("16")
+      expect(config[:log_destinations]).to eq([])
+    end
+
+    it "returns standby as server_role for standby servers" do
+      allow(postgres_server).to receive(:primary?).and_return(false)
+      expect(postgres_server.logs_config[:server_role]).to eq("standby")
+    end
+
+    it "includes log destinations" do
+      PostgresLogDestination.create(
+        postgres_resource_id: resource.id,
+        name: "graylog",
+        type: "syslog",
+        url: "tcp://logs.example.com:6514",
+      )
+      destinations = postgres_server.logs_config[:log_destinations]
+      expect(destinations.length).to eq(1)
+      expect(destinations.first).to eq({type: "syslog", url: "tcp://logs.example.com:6514", options: nil})
     end
   end
 end

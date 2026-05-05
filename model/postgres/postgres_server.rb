@@ -14,7 +14,9 @@ class PostgresServer < Sequel::Model
   plugin ProviderDispatcher, __FILE__
   plugin SemaphoreMethods, :initial_provisioning, :refresh_certificates, :update_superuser_password, :checkup,
     :restart, :configure, :fence, :unfence, :planned_take_over, :unplanned_take_over, :configure_metrics,
-    :destroy, :recycle, :recycle_lagging_read_replica, :recycle_unavailable_server, :recycle_by_user_request, :promote_read_replica, :refresh_walg_credentials, :configure_s3_new_timeline, :lockout, :use_physical_slot
+    :destroy, :recycle, :recycle_lagging_read_replica, :recycle_unavailable_server, :recycle_by_user_request,
+    :promote_read_replica, :refresh_walg_credentials, :configure_s3_new_timeline, :lockout, :use_physical_slot,
+    :configure_logs
   include HealthMonitorMethods
   include MetricsTargetMethods
 
@@ -64,10 +66,11 @@ class PostgresServer < Sequel::Model
       "log_timezone" => "'UTC'",
       "log_directory" => "'pg_log'",
       "log_filename" => "'postgresql-%a.log'",
-      "log_destination" => "'stderr, jsonlog'",
       "log_truncate_on_rotation" => "true",
       "log_rotation_age" => "1440",
       "logging_collector" => "on",
+      "log_destination" => "'stderr, jsonlog'",
+      "log_line_prefix" => "'%m [%p:%l] (%x,%v): host=%r,db=%d,user=%u,app=%a,client=%h '",
       "timezone" => "'UTC'",
       "lc_messages" => "'C.UTF-8'",
       "lc_monetary" => "'C.UTF-8'",
@@ -214,23 +217,33 @@ class PostgresServer < Sequel::Model
   end
 
   def lsn_caught_up
-    return true if primary?
+    return true if primary? || (read_replica? && resource.parent.nil?)
 
     parent_server = if read_replica?
-      resource.parent&.representative_server
+      resource.parent.representative_server
     else
       resource.representative_server
     end
 
-    !parent_server || lsn_diff(parent_server.current_lsn, current_lsn) < 80 * 1024 * 1024
+    (parent_lsn = parent_server.last_known_lsn) && (lsn = last_known_lsn) && lsn_diff(parent_lsn, lsn) < 80 * 1024 * 1024
   end
 
   def current_lsn
     run_query(DB.select(Sequel.function(lsn_function_name)))
   end
 
+  def data_disk_usage
+    vm.sshable.cmd("df --output=used /dat | tail -n 1").strip.to_i
+  rescue
+    0
+  end
+
   def lsn_monitor_ds
     POSTGRES_MONITOR_DB[:postgres_lsn_monitor].where(postgres_server_id: id)
+  end
+
+  def last_known_lsn
+    lsn_monitor_ds.get(:last_known_lsn)
   end
 
   def failover_target(mode: "unplanned")
@@ -253,8 +266,7 @@ class PostgresServer < Sequel::Model
     return nil if target.nil?
 
     if resource.ha_type == PostgresResource::HaType::ASYNC
-      return unless (last_known_lsn = lsn_monitor_ds.get(:last_known_lsn))
-      return if lsn_diff(last_known_lsn, target[:lsn]) > 80 * 1024 * 1024 # 80 MB or ~5 WAL files
+      return if (lsn = last_known_lsn).nil? || lsn_diff(lsn, target[:lsn]) > 80 * 1024 * 1024 # 80 MB or ~5 WAL files
     end
 
     if mode == "planned"
@@ -423,6 +435,18 @@ class PostgresServer < Sequel::Model
       additional_labels:,
       metrics_dir: "/home/ubi/postgres/metrics",
       project_id: Config.postgres_service_project_id,
+    }
+  end
+
+  def logs_config
+    {
+      instance: ubid,
+      server_role: primary? ? "primary" : "standby",
+      version:,
+      resource_name: resource.name,
+      log_destinations: resource.log_destinations.map { |ld|
+        {type: ld.type, url: ld.url, options: ld.options}
+      },
     }
   end
 

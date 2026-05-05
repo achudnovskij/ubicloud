@@ -16,7 +16,7 @@ RSpec.describe Prog::MachineImage::CreateVersionMetal do
       vm_id: vm.id, boot: true, size_gib: 5, disk_index: 0,
       storage_device_id: sd.id, vhost_block_backend_id: vhost_block_backend.id,
       key_encryption_key_1_id: StorageKeyEncryptionKey.create_random(auth_data: "test-source-kek").id,
-      vring_workers: 1,
+      vring_workers: 1, track_written: true,
     )
     vm
   }
@@ -65,12 +65,20 @@ RSpec.describe Prog::MachineImage::CreateVersionMetal do
   }
 
   describe ".assemble" do
+    it "fails when source VM arch does not match machine image arch" do
+      machine_image.update(arch: "arm64")
+
+      expect {
+        described_class.assemble(machine_image, "1.0", source_vm, store)
+      }.to raise_error("Source VM arch (x64) does not match machine image arch (arm64)")
+    end
+
     it "fails when source VM is not a metal VM" do
       vm_without_host = create_vm(project_id: project.id, name: "vm-without-host")
 
       expect {
         described_class.assemble(machine_image, "1.0", vm_without_host, store)
-      }.to raise_error("source vm must be a metal vm")
+      }.to raise_error("Source VM must be a metal VM")
     end
 
     it "fails when source VM has more than one storage volume" do
@@ -83,7 +91,7 @@ RSpec.describe Prog::MachineImage::CreateVersionMetal do
 
       expect {
         described_class.assemble(machine_image, "1.0", source_vm.reload, store)
-      }.to raise_error("source vm must have only one storage volume")
+      }.to raise_error("Source VM must have only one storage volume")
     end
 
     it "fails when source VM is not stopped" do
@@ -97,23 +105,22 @@ RSpec.describe Prog::MachineImage::CreateVersionMetal do
 
       expect {
         described_class.assemble(machine_image, "1.0", running_vm, store)
-      }.to raise_error("source vm must be stopped")
+      }.to raise_error("Source VM must be stopped")
     end
 
-    it "fails when source VM backend does not support archive" do
-      old_backend = create_vhost_block_backend(version: "v0.3.0", allocation_weight: 0, vm_host_id: vm_host.id)
-      old_vm = create_vm(vm_host_id: vm_host.id, project_id: project.id, name: "vm-with-old-ubiblk")
-      Strand.create_with_id(old_vm, prog: "Vm::Nexus", label: "stopped")
+    it "fails when source VM's storage volume doesn't support machine images" do
+      untracked_vm = create_vm(vm_host_id: vm_host.id, project_id: project.id, name: "vm-untracked")
+      Strand.create_with_id(untracked_vm, prog: "Vm::Nexus", label: "stopped")
       VmStorageVolume.create(
-        vm_id: old_vm.id, boot: true, size_gib: 5, disk_index: 0,
-        storage_device_id: source_vol.storage_device_id, vhost_block_backend_id: old_backend.id,
+        vm_id: untracked_vm.id, boot: true, size_gib: 5, disk_index: 0,
+        storage_device_id: source_vol.storage_device_id, vhost_block_backend_id: source_vol.vhost_block_backend_id,
         key_encryption_key_1_id: StorageKeyEncryptionKey.create_random(auth_data: "y").id,
         vring_workers: 1,
       )
 
       expect {
-        described_class.assemble(machine_image, "1.0", old_vm, store)
-      }.to raise_error("source vm's vhost block backend must support archive")
+        described_class.assemble(machine_image, "1.0", untracked_vm, store)
+      }.to raise_error("Source VM's storage volume doesn't support machine images")
     end
 
     it "fails when source VM's storage volume is not encrypted" do
@@ -122,26 +129,12 @@ RSpec.describe Prog::MachineImage::CreateVersionMetal do
       VmStorageVolume.create(
         vm_id: unencrypted_vm.id, boot: true, size_gib: 5, disk_index: 0,
         storage_device_id: source_vol.storage_device_id, vhost_block_backend_id: source_vol.vhost_block_backend_id,
-        vring_workers: 1,
+        vring_workers: 1, track_written: true,
       )
 
       expect {
         described_class.assemble(machine_image, "1.0", unencrypted_vm, store)
-      }.to raise_error("source vm's storage volume must be encrypted")
-    end
-
-    it "fails when source VM has no vhost block backend" do
-      no_backend_vm = create_vm(vm_host_id: vm_host.id, project_id: project.id, name: "vm-with-no-vhost-backend")
-      Strand.create_with_id(no_backend_vm, prog: "Vm::Nexus", label: "stopped")
-      VmStorageVolume.create(
-        vm_id: no_backend_vm.id, boot: true, size_gib: 5, disk_index: 0,
-        storage_device_id: source_vol.storage_device_id,
-        key_encryption_key_1_id: StorageKeyEncryptionKey.create_random(auth_data: "z").id,
-      )
-
-      expect {
-        described_class.assemble(machine_image, "1.0", no_backend_vm, store)
-      }.to raise_error("source vm's vhost block backend must support archive")
+      }.to raise_error("Source VM's storage volume must be encrypted")
     end
 
     it "creates a machine image version, its metal instance & archive_kek, and strand" do

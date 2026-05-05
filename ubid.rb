@@ -55,6 +55,7 @@ class UBID
   TYPE_PAYMENT_METHOD = "pm"
   TYPE_DISCOUNT_CODE = "dc"
   TYPE_PROJECT_DISCOUNT_CODE = "pd"
+  TYPE_RESOURCE_DISCOUNT = "rd"
   TYPE_GITHUB_INSTALLATION = "g1"
   TYPE_GITHUB_RUNNER = "gr"
   TYPE_VM_POOL = "vp"
@@ -108,6 +109,7 @@ class UBID
   TYPE_MACHINE_IMAGE = "m1"
   TYPE_MACHINE_IMAGE_VERSION = "mv"
   TYPE_MACHINE_IMAGE_STORE = "m0"
+  TYPE_POSTGRES_LOG_DESTINATION = "1d"
 
   # Common entropy-based type for everything else
   TYPE_ETC = "et"

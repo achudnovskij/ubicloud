@@ -175,6 +175,7 @@ module Config
 
   # Machine Images
   override :machine_image_max_size_gib, 40, int
+  optional :machine_images_service_project_id, uuid
 
   # Pagerduty
   optional :pagerduty_key, string, clear: true
@@ -235,6 +236,9 @@ module Config
   optional :e2e_aws_access_key, string, clear: true
   optional :e2e_aws_secret_key, string, clear: true
   optional :e2e_cache_proxy_download_url, string
+
+  # Local e2e
+  optional :local_e2e_postgres_test_project_id, uuid
 
   # Load Balancer
   optional :load_balancer_service_project_id, uuid

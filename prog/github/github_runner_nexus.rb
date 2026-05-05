@@ -121,7 +121,13 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     end
     billed_vm_size += "-arm" if arch == "arm64"
     github_runner.update(billed_vm_size:)
-    rate_id = BillingRate.from_resource_properties("GitHubRunnerMinutes", billed_vm_size, "global")["id"]
+    # We continue to charge existing customers with the old rates until June 1st
+    active_at = if Time.now < Time.utc(2026, 6) && installation.created_at < Time.utc(2026, 5)
+      Time.utc(2026, 4, 30)
+    else
+      Time.now
+    end
+    rate_id = BillingRate.from_resource_properties("GitHubRunnerMinutes", billed_vm_size, "global", false, active_at)["id"]
 
     retries = 0
     begin
@@ -178,6 +184,8 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     page_args = case e.message
     when /Repository level self-hosted runners are disabled/
       ["Repository level self-hosted runners are disabled on #{installation_ubid}", ["GithubSelfHostRunnersDisabled", installation_ubid]]
+    when /GitHub Actions is disabled on this repository/
+      ["GitHub Actions is disabled on #{installation_ubid}", ["GithubActionsDisabled", installation_ubid]]
     when /your IP address is not permitted to access this resource/
       ["The organization has an IP allow list enabled on #{installation_ubid}", ["GithubIPAllowlistEnabled", installation_ubid]]
     when /Resource not accessible by integration/
@@ -186,6 +194,7 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     end
 
     if page_args
+      Clog.emit("Matched a known GitHub API error", {matched_github_api_error: {error_message: e.message, label: github_runner.label, repository_name: github_runner.repository_name}})
       Prog::PageNexus.assemble(*page_args, installation_ubid, severity: "warning")
       github_runner.incr_destroy
       nap 0
@@ -279,7 +288,7 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     end
 
     # check utilization, if it's high, wait for it to go down
-    family_utilization = VmHost.where(allocation_state: "accepting", arch:)
+    family_utilization = VmHost.where(allocation_state: "accepting", location_id: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID], arch:)
       .select_group(:family)
       .select_append { round(sum(:used_cores) * 100.0 / sum(:total_cores), 2).cast(:float).as(:utilization) }
       .to_hash(:family, :utilization)

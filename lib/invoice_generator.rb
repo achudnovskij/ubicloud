@@ -88,6 +88,12 @@ class InvoiceGenerator
             {rate: Config.annual_non_dutch_eu_sales_exceed_threshold ? country.vat_rates["standard"] : 21, reversed: false, eur_rate: @eur_rate}
           end
         end
+        resource_discounts = ResourceDiscount
+          .where(project_id: project.id)
+          .where { |d| d.active_from < @end_time }
+          .where { |d| (d.active_to =~ nil) | (d.active_to > @begin_time) }
+          .all
+
         project_content[:resources] = []
         project_content[:subtotal] = 0
         project_records.group_by { |pr| [pr[:resource_id], pr[:resource_name]] }.each do |(resource_id, resource_name), line_items|
@@ -109,12 +115,23 @@ class InvoiceGenerator
             line_item_content[:begin_time] = li[:begin_time].utc
             line_item_content[:unit_price] = li[:unit_price].to_f
 
+            line_item_discount = 0
+            if (rd = resource_discounts.find { |d| d.matches?(li) })
+              percent = rd.discount_percent.to_f
+              discount_amount = (line_item_content[:cost] * percent / 100.0).round(3)
+              line_item_content[:discount] = {
+                percent:,
+                amount: discount_amount,
+              }
+              line_item_discount = discount_amount
+            end
+
             resource_content[:line_items].push(line_item_content)
-            resource_content[:cost] += line_item_content[:cost]
+            resource_content[:cost] += (line_item_content[:cost] - line_item_discount).round(3)
           end
 
           project_content[:resources].push(resource_content)
-          project_content[:subtotal] += resource_content[:cost]
+          project_content[:subtotal] = (project_content[:subtotal] + resource_content[:cost]).round(3)
         end
 
         # We first apply discounts then credits, this is more beneficial for users as it
@@ -212,24 +229,40 @@ class InvoiceGenerator
     active_billing_records = BillingRecord.eager(project: [:invoices, billing_info: :payment_methods])
       .where { |br| Sequel.pg_range(br.span).overlaps(Sequel.pg_range(@begin_time...@end_time)) }
     active_billing_records = active_billing_records.where(project_id: @project_ids) unless @project_ids.empty?
-    active_billing_records.all.map do |br|
-      # We cap the billable duration at 672 hours. In this way, we can
-      # charge the users same each month no matter the number of days
-      # in that month.
-      duration = [672 * 60, br.duration(@begin_time, @end_time).ceil].min
-      {
-        project: br.project,
-        resource_id: br.resource_id,
-        location: br.billing_rate["location"],
-        resource_name: br.resource_name,
-        resource_type: br.billing_rate["resource_type"],
-        resource_family: br.billing_rate["resource_family"],
-        amount: br.amount,
-        cost: (br.amount * duration * br.billing_rate["unit_price"]).round(3),
-        duration:,
-        begin_time: br.span.begin,
-        unit_price: br.billing_rate["unit_price"],
-      }
+
+    # We cap the billable duration at 672 hours. In this way, we can
+    # charge the users same each month no matter the number of days
+    # in that month. When records share a (resource_id, slot) tag — e.g.
+    # a Postgres primary that was scaled mid-month produces two records —
+    # the cap is applied to their combined duration so transitions don't
+    # let a customer exceed 28 days of charges for the same slot.
+    groups = active_billing_records.all.group_by do |br|
+      slot = br.resource_tags["slot"]
+      slot ? [br.resource_id, slot] : br.id
+    end
+
+    monthly_cap = 672 * 60
+    groups.flat_map do |_, group|
+      group_raw_durations = group.map { it.duration(@begin_time, @end_time).ceil }
+      group_total_duration = group_raw_durations.sum
+      scale_factor = [monthly_cap.fdiv(group_total_duration), 1.0].min
+      group.zip(group_raw_durations).map do |br, raw_duration|
+        duration = (raw_duration * scale_factor).round
+        {
+          project: br.project,
+          resource_id: br.resource_id,
+          location: br.billing_rate["location"],
+          resource_name: br.resource_name,
+          resource_type: br.billing_rate["resource_type"],
+          resource_family: br.billing_rate["resource_family"],
+          byoc: br.billing_rate["byoc"],
+          amount: br.amount,
+          cost: (br.amount * duration * br.billing_rate["unit_price"]).round(3),
+          duration:,
+          begin_time: br.span.begin,
+          unit_price: br.billing_rate["unit_price"],
+        }
+      end
     end
   end
 end

@@ -66,14 +66,25 @@ module Validation
   # - Same with regular name pattern, but shorter (40 chars)
   ALLOWED_KUBERNETES_NAME_PATTERN = %r{\A[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?\z}
 
+  # Machine image version labels (e.g. v1.0, 20260423120000)
+  # - Max length 64
+  # - ASCII letters, numbers, dot, hyphen, underscore
+  # - Must start with a letter or number
+  ALLOWED_MACHINE_IMAGE_VERSION_LABEL_PATTERN = %r{\A[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\z}
+
   def self.validate_name(name)
     msg = "Name must only contain lowercase letters, numbers, and hyphens and have max length 63."
-    fail ValidationFailed.new({name: msg}) unless name&.match(ALLOWED_NAME_PATTERN)
+    fail ValidationFailed.new({name: msg}) unless name&.match?(ALLOWED_NAME_PATTERN)
+  end
+
+  def self.validate_machine_image_version_label(version)
+    msg = "Version label must start with a letter or number and may contain ASCII letters, numbers, dot, hyphen, and underscore (max 64 characters)."
+    fail ValidationFailed.new({version: msg}) unless version&.match?(ALLOWED_MACHINE_IMAGE_VERSION_LABEL_PATTERN)
   end
 
   def self.validate_minio_username(username)
     msg = "Minio user must only contain lowercase letters, numbers, hyphens and underscore and cannot start with a number or hyphen. It also have max length of 32, min length of 3."
-    fail ValidationFailed.new({username: msg}) unless username&.match(ALLOWED_MINIO_USERNAME_PATTERN)
+    fail ValidationFailed.new({username: msg}) unless username&.match?(ALLOWED_MINIO_USERNAME_PATTERN)
   end
 
   def self.validate_minio_setup(storage_size_gib:, pool_count:, server_count:, drive_count:)
@@ -124,8 +135,8 @@ module Validation
   end
 
   def self.validate_boot_image(image_name)
-    unless Option::BootImages.find { it.name == image_name }
-      fail ValidationFailed.new({boot_image: "\"#{image_name}\" is not a valid boot image name. Available boot image names are: #{Option::BootImages.map(&:name)}"})
+    unless Option::BootImages.find { it.name == image_name } || image_name.include?("@")
+      fail ValidationFailed.new({boot_image: "\"#{image_name}\" is not a valid boot image name. Available boot image names are: #{Option::BootImages.map(&:name)}, or you can use machine-image-name@version, machine-image-name@latest"})
     end
   end
 
@@ -139,7 +150,7 @@ module Validation
 
   def self.validate_os_user_name(os_user_name)
     msg = "OS user name must only contain lowercase letters, numbers, hyphens and underscore and cannot start with a number or hyphen. It also have max length of 32."
-    fail ValidationFailed.new({user: msg}) unless os_user_name&.match(ALLOWED_OS_USER_NAME_PATTERN)
+    fail ValidationFailed.new({user: msg}) unless os_user_name&.match?(ALLOWED_OS_USER_NAME_PATTERN)
   end
 
   def self.validate_storage_volumes(storage_volumes, boot_disk_index)
@@ -250,17 +261,49 @@ module Validation
   end
 
   def self.validate_short_text(text, field_name)
-    fail ValidationFailed.new({field_name: "The #{field_name} must have max length 63 and only contain alphanumeric characters, hyphen, underscore, space, parantheses, exclamation, question mark and star."}) unless text.match(ALLOWED_SHORT_TEXT_PATTERN)
+    fail ValidationFailed.new({field_name: "The #{field_name} must have max length 63 and only contain alphanumeric characters, hyphen, underscore, space, parantheses, exclamation, question mark and star."}) unless text.match?(ALLOWED_SHORT_TEXT_PATTERN)
   end
 
   def self.validate_account_name(name)
-    fail ValidationFailed.new({name: "Name must only contain letters, numbers, spaces, and hyphens and have max length 63."}) unless name&.match(ALLOWED_ACCOUNT_NAME)
+    fail ValidationFailed.new({name: "Name must only contain letters, numbers, spaces, and hyphens and have max length 63."}) unless name&.match?(ALLOWED_ACCOUNT_NAME)
   end
 
   def self.validate_url(url)
     uri = URI.parse(url)
     fail ValidationFailed.new({url: "Invalid URL scheme. Only https URLs are supported."}) if uri.scheme != "https"
     fail ValidationFailed.new({url: "Invalid URL"}) if uri.host.nil? || uri.host.empty?
+  rescue URI::InvalidURIError
+    fail ValidationFailed.new({url: "Invalid URL"})
+  end
+
+  def self.validate_log_destination_options(type, options)
+    return unless options
+
+    allowed_key = (type == "otlp") ? "headers" : "structured_data"
+    extra = options.keys - [allowed_key]
+    fail ValidationFailed.new({options: "options may only contain '#{allowed_key}' for #{type}"}) if extra.any?
+
+    if type == "otlp"
+      headers = options["headers"]
+      if headers
+        fail ValidationFailed.new({options: "options.headers must be a flat object with string values"}) unless
+          headers.is_a?(Hash) && headers.values.all?(String)
+      end
+    else
+      sd = options["structured_data"]
+      if sd
+        fail ValidationFailed.new({options: "options.structured_data must be an object mapping SD-IDs to key/value objects"}) unless
+          sd.is_a?(Hash) && sd.values.all? { it.is_a?(Hash) && it.values.all?(String) }
+      end
+    end
+  end
+
+  def self.validate_syslog_url(url)
+    uri = URI.parse(url)
+    fail ValidationFailed.new({url: "Invalid URL scheme. Only tcp URLs are supported for syslog."}) if uri.scheme != "tcp"
+    fail ValidationFailed.new({url: "Invalid URL"}) if uri.host.nil? || uri.host.empty?
+    fail ValidationFailed.new({url: "Invalid URL"}) if uri.port.nil?
+    fail ValidationFailed.new({url: "port must be between 1 and 65535"}) unless (1..65535).cover?(uri.port)
   rescue URI::InvalidURIError
     fail ValidationFailed.new({url: "Invalid URL"})
   end
@@ -295,7 +338,7 @@ module Validation
   end
 
   def self.validate_kubernetes_name(name)
-    fail ValidationFailed.new({name: "Kubernetes cluster name must only contain lowercase letters, numbers, and hyphens and have max length 40."}) unless name&.match(ALLOWED_KUBERNETES_NAME_PATTERN)
+    fail ValidationFailed.new({name: "Kubernetes cluster name must only contain lowercase letters, numbers, and hyphens and have max length 40."}) unless name&.match?(ALLOWED_KUBERNETES_NAME_PATTERN)
   end
 
   def self.validate_kubernetes_cp_node_count(count)
@@ -313,7 +356,7 @@ module Validation
 
   def self.validate_victoria_metrics_username(username)
     msg = "VictoriaMetrics user must only contain lowercase letters, numbers, hyphens and underscore and cannot start with a number or hyphen. It also has a max length of 32 and a min length of 3."
-    fail ValidationFailed.new({username: msg}) unless username&.match(ALLOWED_VICTORIA_METRICS_USERNAME_PATTERN)
+    fail ValidationFailed.new({username: msg}) unless username&.match?(ALLOWED_VICTORIA_METRICS_USERNAME_PATTERN)
   end
 
   def self.validate_victoria_metrics_storage_size(storage_size)

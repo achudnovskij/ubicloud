@@ -3,32 +3,14 @@
 require_relative "../../lib/util"
 
 class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
-  def self.assemble(provider: "metal")
-    postgres_test_project = Project.create(name: "Postgres-HA-Test-Project")
-    Project[Config.postgres_service_project_id] ||
-      Project.create_with_id(Config.postgres_service_project_id || Project.generate_uuid, name: "Postgres-Service-Project")
+  semaphore :pause, :destroy
 
-    Strand.create(
-      prog: "Test::HaPostgresResource",
-      label: "start",
-      stack: [{"postgres_test_project_id" => postgres_test_project.id, "provider" => provider}],
-    )
+  def self.assemble(provider: "metal", **)
+    super(provider:, project_name: "Postgres-HA-Test-Project", **)
   end
 
   label def start
-    location_id, target_vm_size, target_storage_size_gib = self.class.postgres_test_location_options(frame["provider"])
-
-    st = Prog::Postgres::PostgresResourceNexus.assemble(
-      project_id: frame["postgres_test_project_id"],
-      location_id:,
-      name: "postgres-test-ha",
-      target_vm_size:,
-      target_storage_size_gib:,
-      ha_type: "async",
-    )
-
-    update_stack({"postgres_resource_id" => st.id})
-    hop_wait_postgres_resource
+    super(name: "postgres-test-ha", ha_type: "async")
   end
 
   label def wait_postgres_resource
@@ -43,7 +25,7 @@ class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
   label def test_postgres
     unless representative_server.run_query(test_queries_sql) == "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1"
       update_stack({"fail_message" => "Failed to run test queries"})
-      hop_destroy_postgres
+      hop_destroy
     end
 
     hop_trigger_failover
@@ -75,7 +57,7 @@ class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
 
     if Time.now.to_i >= deadline
       update_stack({"fail_message" => "Failover did not complete within 600 seconds"})
-      hop_destroy_postgres
+      hop_destroy
     end
 
     nap 10
@@ -92,7 +74,7 @@ class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
     Clog.emit("Running read queries after failover")
     unless representative_server.run_query(read_queries_sql) == "4159.90\n415.99\n4.1"
       update_stack({"fail_message" => "Failed to run read queries after failover"})
-      hop_destroy_postgres
+      hop_destroy
     end
 
     Clog.emit("Running write queries after failover")
@@ -100,7 +82,7 @@ class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
       update_stack({"fail_message" => "Failed to run write queries after failover"})
     end
 
-    hop_destroy_postgres
+    hop_destroy
   end
 
   label def destroy_postgres
@@ -111,14 +93,11 @@ class Prog::Test::HaPostgresResource < Prog::Test::PostgresBase
 
   label def wait_resources_destroyed
     nap 5 if postgres_resource
+    nap_if_private_subnet
     hop_finish
   end
 
-  label def finish
-    finish_test("Postgres tests are finished!")
-  end
-
-  label def failed
-    nap 15
-  end
+  label :finish
+  label :failed
+  label :destroy
 end
