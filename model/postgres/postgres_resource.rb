@@ -11,12 +11,13 @@ class PostgresResource < Sequel::Model
   one_to_one :representative_server, class: :PostgresServer, key: :resource_id, conditions: {is_representative: true}, read_only: true
   one_through_one :timeline, class: :PostgresTimeline, join_table: :postgres_server, left_key: :resource_id, read_only: true
   one_to_many :metric_destinations, class: :PostgresMetricDestination, remover: nil, clearer: nil
+  one_to_many :log_destinations, class: :PostgresLogDestination, remover: nil, clearer: nil
   many_to_one :private_subnet, read_only: true
   many_to_one :location, read_only: true
   one_to_many :read_replicas, class: :PostgresResource, key: :parent_id, conditions: {restore_target: nil}, read_only: true
   one_to_one :init_script, class: :PostgresInitScript, key: :id, read_only: true
 
-  plugin :association_dependencies, metric_destinations: :destroy, init_script: :destroy
+  plugin :association_dependencies, metric_destinations: :destroy, log_destinations: :destroy, init_script: :destroy
   dataset_module Pagination
 
   plugin ResourceMethods, redacted_columns: [:root_cert_1, :root_cert_2, :server_cert, :trusted_ca_certs, :client_root_cert_1, :client_root_cert_2, :client_cert],
@@ -232,8 +233,11 @@ class PostgresResource < Sequel::Model
     servers.any? { it.taking_over? }
   end
 
-  def incr_restart
-    Semaphore.incr(servers_dataset.select(:id), "restart")
+  def server_incr(*semaphores)
+    server_ids = servers.map(&:id)
+    semaphores.map do
+      Semaphore.incr(server_ids, it)
+    end
   end
 
   def upgrade_stage
@@ -685,4 +689,5 @@ end
 #  postgres_resource_private_subnet_id_fkey | (private_subnet_id) REFERENCES private_subnet(id)
 # Referenced By:
 #  postgres_init_script        | postgres_init_script_id_fkey                          | (id) REFERENCES postgres_resource(id)
+#  postgres_log_destination    | postgres_log_destination_postgres_resource_id_fkey    | (postgres_resource_id) REFERENCES postgres_resource(id)
 #  postgres_metric_destination | postgres_metric_destination_postgres_resource_id_fkey | (postgres_resource_id) REFERENCES postgres_resource(id)

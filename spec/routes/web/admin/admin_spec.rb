@@ -723,7 +723,7 @@ RSpec.describe CloverAdmin do
     expect(page.title).to eq "Ubicloud Admin - Project #{project.ubid}"
     find("summary", text: /Current Usage \(subtotal: \$[\d.]+, cost: \$[\d.]+\)/).click
     expect(page.all(".project-usage-table tbody tr").count).to eq 1
-    expect(page.all(".project-usage-table tbody tr").first.all("td").map(&:text)).to eq ["test-vm", "VmVCpu", "standard", "61 minutes", "$0.037"]
+    expect(page.all(".project-usage-table tbody tr").first.all("td").map(&:text)).to eq ["test-vm", "VmVCpu", "standard", "61 minutes", "$0.047"]
   end
 
   it "converts ubids to link" do
@@ -1163,6 +1163,73 @@ RSpec.describe CloverAdmin do
     expect(downloaded_names).to eq %w[github-ubuntu-2204 github-ubuntu-2404]
   end
 
+  it "supports force creating a VM on a VmHost" do
+    vmh = create_vm_host
+    BootImage.create(vm_host_id: vmh.id, name: "ubuntu-jammy", version: "1", size_gib: 14, activated_at: Time.now)
+    project = Project.create(name: "force-vm-project")
+
+    fill_in "UBID, UUID, or prefix:term", with: vmh.ubid
+    click_button "Show Object"
+    expect(page.title).to eq "Ubicloud Admin - VmHost #{vmh.ubid}"
+
+    click_link "Force Create VM"
+    fill_in "project_id", with: project.ubid
+    fill_in "public_key", with: "ssh-ed25519 key"
+    fill_in "name", with: "forced-vm"
+    select "standard-2", from: "size"
+    select "ubuntu-jammy", from: "boot_image"
+    click_button "Force Create VM"
+    expect(page).to have_flash_notice("VM creation scheduled")
+    expect(page.title).to eq "Ubicloud Admin - VmHost #{vmh.ubid}"
+
+    vm = Vm[name: "forced-vm"]
+    expect(vm).not_to be_nil
+    expect(vm.project_id).to eq project.id
+    expect(vm.boot_image).to eq "ubuntu-jammy"
+    expect(vm.location_id).to eq vmh.location_id
+    expect(vm.arch).to eq vmh.arch
+    expect(vm.ip4_enabled).to be true
+    expect(Strand[vm.id].stack.first["force_host_id"]).to eq vmh.id
+  end
+
+  it "offers burstable sizes for force-create VM only when host accepts slices" do
+    no_slices = create_vm_host(accepts_slices: false)
+    BootImage.create(vm_host_id: no_slices.id, name: "ubuntu-jammy", version: "1", size_gib: 14, activated_at: Time.now)
+    visit "/model/VmHost/#{no_slices.ubid}/force_create_vm"
+    expect(page.all("select[name=size] option").map(&:text)).not_to include("burstable-1")
+
+    with_slices = create_vm_host(accepts_slices: true)
+    BootImage.create(vm_host_id: with_slices.id, name: "ubuntu-jammy", version: "1", size_gib: 14, activated_at: Time.now)
+    visit "/model/VmHost/#{with_slices.ubid}/force_create_vm"
+    expect(page.all("select[name=size] option").map(&:text)).to include("burstable-1")
+  end
+
+  it "deduplicates boot image options across versions in force-create VM form" do
+    vmh = create_vm_host
+    BootImage.create(vm_host_id: vmh.id, name: "ubuntu-jammy", version: "1", size_gib: 14, activated_at: Time.now)
+    BootImage.create(vm_host_id: vmh.id, name: "ubuntu-jammy", version: "2", size_gib: 14, activated_at: Time.now)
+    BootImage.create(vm_host_id: vmh.id, name: "debian-12", version: "1", size_gib: 14, activated_at: Time.now)
+    visit "/model/VmHost/#{vmh.ubid}/force_create_vm"
+    expect(page.all("select[name=boot_image] option").map(&:text)).to eq %w[debian-12 ubuntu-jammy]
+  end
+
+  it "rejects force-create VM when project UBID is invalid" do
+    vmh = create_vm_host
+    BootImage.create(vm_host_id: vmh.id, name: "ubuntu-jammy", version: "1", size_gib: 14, activated_at: Time.now)
+
+    fill_in "UBID, UUID, or prefix:term", with: vmh.ubid
+    click_button "Show Object"
+
+    click_link "Force Create VM"
+    fill_in "project_id", with: "not-a-ubid"
+    fill_in "public_key", with: "ssh-ed25519 key"
+    select "standard-2", from: "size"
+    select "ubuntu-jammy", from: "boot_image"
+    click_button "Force Create VM"
+    expect(page).to have_flash_error("Invalid parameter submitted: project_id")
+    expect(Vm.count).to eq 0
+  end
+
   it "supports provisioning spare GitHubRunner" do
     ins = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User")
     ghr = GithubRunner.create(repository_name: "test-repo", label: "ubicloud", installation_id: ins.id)
@@ -1461,6 +1528,141 @@ RSpec.describe CloverAdmin do
     expect(created_at_cell).to have_content(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/)
   end
 
+  describe "local E2E" do
+    before do
+      project = Project.create(name: "Postgres-Service-Project")
+      allow(Config).to receive(:postgres_service_project_id).and_return(project.id).at_least(:once)
+      allow(Config).to receive(:local_e2e_postgres_test_project_id).and_return(nil).at_least(:once)
+      click_link "Manage Local E2E"
+    end
+
+    it "shows strand status" do
+      expect(page.title).to eq "Ubicloud Admin - Manage Local E2E"
+      expect(page).to have_content("No data available for Active Local E2E Strands")
+
+      local_e2e_path = page.current_path
+      strand = Prog::Test::PostgresResource.assemble(provider: "metal")
+      page.refresh
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq ["Test::PostgresResource", "start", "0", strand.ubid, '{"provider" => "metal"}', "", ""]
+      click_link strand.ubid
+      expect(page.title).to eq "Ubicloud Admin - Strand #{strand.ubid}"
+
+      strand.run
+      pg_ubid = UBID.to_ubid(strand.stack[0]["postgres_resource_id"])
+      visit local_e2e_path
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq ["Test::PostgresResource", "wait_postgres_resource", "0", strand.ubid, "{\"provider\" => \"metal\", \"postgres_resource\" => \"#{pg_ubid}\"}", "", ""]
+      click_link pg_ubid
+      expect(page.title).to eq "Ubicloud Admin - PostgresResource #{pg_ubid}"
+    end
+
+    it "allows creation of strands" do
+      local_e2e_path = page.current_path
+      expect { click_button "Start Local E2E Strand" }.to raise_error(RuntimeError)
+
+      visit local_e2e_path
+      select "metal"
+      expect { click_button "Start Local E2E Strand" }.to raise_error(Roda::RodaPlugins::TypecastParams::Error)
+
+      visit local_e2e_path
+      check "PostgresResource"
+      expect { click_button "Start Local E2E Strand" }.to raise_error(RuntimeError)
+
+      visit local_e2e_path
+      check "PostgresResource"
+      select "metal"
+      click_button "Start Local E2E Strand"
+
+      st = Strand.first(prog: "Test::PostgresResource")
+      expect(st.stack[0]["local_e2e"]).to be true
+      expect(page).to have_flash_notice("Started local E2E strand(s): #{st.ubid}")
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq ["Test::PostgresResource", "start", "0", st.ubid, '{"provider" => "metal"}', "", ""]
+    end
+
+    it "allows creation of multiple strands" do
+      check "PostgresResource"
+      check "HaPostgresResource"
+      select "metal"
+      click_button "Start Local E2E Strand"
+
+      ha_pg_st = Strand.first(prog: "Test::HaPostgresResource")
+      pg_st = Strand.first(prog: "Test::PostgresResource")
+      expect(page).to have_flash_notice("Started local E2E strand(s): #{pg_st.ubid} #{ha_pg_st.ubid}")
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq [
+        "Test::HaPostgresResource", "start", "0", ha_pg_st.ubid, '{"provider" => "metal"}', "", "",
+        "Test::PostgresResource", "start", "0", pg_st.ubid, '{"provider" => "metal"}', "", "",
+      ]
+    end
+
+    it "allows creation of loop strands" do
+      check "PostgresResource"
+      check "HaPostgresResource"
+      select "metal"
+      check "Loop?"
+      click_button "Start Local E2E Strand"
+
+      st = Strand.first(prog: "Test::LocalE2eLoop")
+      expect(page).to have_flash_notice("Started local E2E strand(s): #{st.ubid}")
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq ["Test::LocalE2eLoop", "start", "0", st.ubid, "{\"progs\" => [\"PostgresResource\", \"HaPostgresResource\"], \"prog_args\" => {\"provider\" => \"metal\"}, \"starts\" => 0, \"successes\" => 0, \"failures\" => 0}", "", ""]
+
+      st.run
+      page.refresh
+      child_ubid = st.children[0].ubid
+      expect(page.all(".local-e2e-table td").map(&:text)).to eq [
+        "Test::LocalE2eLoop", "wait", "0", st.ubid, "{\"progs\" => [\"HaPostgresResource\", \"PostgresResource\"], \"prog_args\" => {\"provider\" => \"metal\"}, \"starts\" => 1, \"successes\" => 0, \"failures\" => 0, \"current_strand\" => \"#{child_ubid}\"}", "", "",
+        "Test::PostgresResource", "start", "0", child_ubid, "{\"provider\" => \"metal\"}", "", "",
+      ]
+    end
+
+    it "allows pausing and unpausing strands" do
+      local_e2e_path = page.current_path
+      check "PostgresResource"
+      select "metal"
+      click_button "Start Local E2E Strand"
+
+      click_button "Pause"
+      st = Strand.first(prog: "Test::PostgresResource")
+      expect(page).to have_flash_notice("Strand #{st.ubid} paused")
+      expect(st.semaphores.map(&:name)).to eq ["pause"]
+
+      st.this.update(schedule: "2100-01-01")
+      click_button "Unpause"
+      expect(page).to have_flash_notice("Strand #{st.ubid} unpaused")
+      expect(st.semaphores(reload: true)).to eq []
+      expect(st.this.get(:schedule)).to be_within(10).of(Time.now)
+
+      st.this.update(prog: "Test::Base")
+      expect { click_button "Pause" }.to raise_error(RuntimeError)
+
+      visit local_e2e_path
+      st.destroy
+      click_button "Pause"
+      expect(page).to have_flash_error("Strand not found, it was probably already deleted")
+    end
+
+    it "allows destroying strands" do
+      check "PostgresResource"
+      select "metal"
+      click_button "Start Local E2E Strand"
+
+      click_button "Destroy"
+      st = Strand.first(prog: "Test::PostgresResource")
+      expect(page).to have_flash_notice("Strand #{st.ubid} destroyed")
+      expect(st.semaphores.map(&:name)).to eq ["destroy"]
+    end
+
+    it "allows destroying loop strand" do
+      check "PostgresResource"
+      select "metal"
+      check "Loop?"
+      click_button "Start Local E2E Strand"
+
+      click_button "Destroy"
+      st = Strand.first(prog: "Test::LocalE2eLoop")
+      expect(page).to have_flash_notice("Strand #{st.ubid} destroyed")
+      expect(st.semaphores.map(&:name)).to eq ["destroy"]
+    end
+  end
+
   it "shows admin list" do
     click_link "View Admin List"
     expect(page.title).to eq "Ubicloud Admin - Admin List"
@@ -1471,7 +1673,9 @@ RSpec.describe CloverAdmin do
   end
 
   it "shows GitHub runner x64 VM usage" do
-    installation = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User")
+    project = Project.create(name: "test-project")
+    project.add_quota(quota_id: ProjectQuota.default_quotas["GithubRunnerVCpu"]["id"], value: 400)
+    installation = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User", project_id: project.id)
     installation_id = installation.id
     repository_name = "test-repo"
     GithubRunner.create(installation_id:, repository_name:, label: "ubicloud", allocated_at: Time.now)
@@ -1480,18 +1684,24 @@ RSpec.describe CloverAdmin do
     GithubRunner.create(installation_id:, repository_name:, label: "ubicloud-standard-4", allocated_at: Time.now, vm_id: create_vm(vcpus: 4, family: "premium").id)
     GithubRunner.create(installation_id:, repository_name:, label: "ubicloud-standard-8", allocated_at: Time.now, vm_id: create_vm(vcpus: 8, family: "m7a").id)
     GithubRunner.create(installation_id:, repository_name:, label: "ubicloud-standard-30")
+    create_vm_host(location_id: Location::GITHUB_RUNNERS_ID, family: "standard", used_cores: 12, total_cores: 48)
+    create_vm_host(location_id: Location::HETZNER_FSN1_ID, family: "premium", used_cores: 12, total_cores: 24)
+    create_vm(boot_image: Config.github_ubuntu_2204_x64_aws_ami_version, vcpus: 4)
+    create_vm(boot_image: Config.github_ubuntu_2404_x64_aws_ami_version, vcpus: 8)
+    create_vm(arch: "arm64", boot_image: Config.github_ubuntu_2404_arm64_aws_ami_version, vcpus: 16)
 
     click_link "GitHub Runner VM Usage"
     expect(page.title).to eq "Ubicloud Admin - GitHub Runner x64 VM Usage"
     expect(page).to have_link "Show arm64"
+    expect(page).to have_css("p", exact_text: "Utilization: standard: 25.0% , premium: 50.0% , spilled vcpus: 12")
     expect(page.all("#content td").map(&:text)).to eq [
-      "TOTAL", "",
+      "TOTAL", "", "", "400",
       "2", "1", "1", "0", "1", "0",
       "16 / 46", "2 / 14",
       "1", "0", "0", "0", "0", "0",
       "0", "1", "0", "0", "0",
       "0", "0", "1", "0",
-      "test-installation", "true",
+      "test-installation", "true", "", "400",
       "2", "1", "1", "0", "1", "0",
       "16 / 46", "2 / 14",
       "1", "0", "0", "0", "0", "0",
@@ -1507,22 +1717,26 @@ RSpec.describe CloverAdmin do
     click_link "GitHub Runner VM Usage"
     expect(page.all("#content td").map(&:text)).to eq []
 
-    installation = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User")
+    project = Project.create(name: "test-project")
+    installation = GithubInstallation.create(installation_id: 123, name: "test-installation", type: "User", project_id: project.id)
     GithubRunner.create(installation_id: installation.id, repository_name: "test-repo", label: "ubicloud-arm")
     GithubRunner.create(installation_id: installation.id, repository_name: "test-repo", label: "ubicloud")
+    create_vm_host(arch: "arm64", location_id: Location::GITHUB_RUNNERS_ID, family: "standard", used_cores: 6, total_cores: 24)
+    create_vm(arch: "arm64", boot_image: Config.github_ubuntu_2204_arm64_aws_ami_version, vcpus: 8)
 
     click_link "Show arm64"
 
     expect(page.title).to eq "Ubicloud Admin - GitHub Runner arm64 VM Usage"
     expect(page).to have_link "Show x64"
+    expect(page).to have_css("p", exact_text: "Utilization: standard: 25.0% , spilled vcpus: 8")
     expect(page.all("#content td").map(&:text)).to eq [
-      "TOTAL", "",
+      "TOTAL", "", "", "100",
       "1", "0", "0", "0", "0", "0",
       "0 / 2", "0 / 0",
       "0", "0", "0", "0", "0", "0",
       "0", "0", "0", "0", "0",
       "0", "0", "0", "0",
-      "test-installation", "true",
+      "test-installation", "true", "", "100",
       "1", "0", "0", "0", "0", "0",
       "0 / 2", "0 / 0",
       "0", "0", "0", "0", "0", "0",
@@ -2071,7 +2285,7 @@ RSpec.describe CloverAdmin do
   end
 
   describe "admin authentication audit log" do
-    def insert_account_audit_log(account_id: DB[:admin_account].get(:id), message: "login", metadata: {"ip" => "127.0.0.1"}, at: Sequel::CURRENT_TIMESTAMP)
+    def insert_account_audit_log(account_id: DB[:admin_account].where(login: "admin").get(:id), message: "login", metadata: {"ip" => "127.0.0.1"}, at: Sequel::CURRENT_TIMESTAMP)
       DB[:admin_account_authentication_audit_log].returning(:id).insert(
         account_id:,
         message:,

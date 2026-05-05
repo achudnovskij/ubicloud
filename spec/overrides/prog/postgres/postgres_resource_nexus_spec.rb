@@ -24,12 +24,13 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       postgres_server
       postgres_resource.update(tags: Sequel.pg_jsonb([{"key" => "env", "value" => "prod"}]))
 
-      override_method.bind_call(nx, billing_rate_id:, amount: 1)
+      override_method.bind_call(nx, billing_rate_id:, amount: 1, slot: "primary-vcpu")
 
       br = BillingRecord.where(resource_id: postgres_resource.id).first
       expect(br.resource_tags["env"]).to eq("prod")
       expect(br.resource_tags["cloud_provider"]).not_to be_nil
       expect(br.resource_tags["region"]).to eq(postgres_resource.location.name)
+      expect(br.resource_tags["slot"]).to eq("primary-vcpu")
     end
 
     # The override is always prepended (OVERRIDE_DIR is set per test suite run, not individual test),
@@ -40,9 +41,9 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       postgres_server
       base_method = nx.method(:create_billing_record).super_method
       expect(base_method).not_to be_nil
-      base_method.call(billing_rate_id:, amount: 1)
+      base_method.call(billing_rate_id:, amount: 1, slot: "primary-vcpu")
       br = BillingRecord.where(resource_id: postgres_resource.id).first
-      expect(br.resource_tags).to eq([])
+      expect(br.resource_tags).to eq({"slot" => "primary-vcpu"})
     end
   end
 end

@@ -28,18 +28,9 @@ class Prog::Postgres::ConvergePostgresResource < Prog::Base
     hop_wait_for_maintenance_window if postgres_resource.has_enough_ready_servers?
 
     waiting_servers = postgres_resource.servers(eager: [:semaphores, vm: [:vm_storage_volumes, :sshable]]).reject { it.is_representative || it.needs_recycling? }
+    total_disk_usage = waiting_servers.sum(&:data_disk_usage)
 
-    total_disk_usage = waiting_servers.sum do |s|
-      s.vm.sshable.cmd("df --output=used /dat | tail -n 1").strip.to_i
-    rescue
-      # /dat missing before mount_data_disk, ignore errors, if persistent then deadline will be reached
-      0
-    end
-
-    total_lsn = waiting_servers.sum do |s|
-      last_known_lsn = s.lsn_monitor_ds.get(:last_known_lsn)
-      last_known_lsn ? s.lsn2int(last_known_lsn) : 0
-    end
+    total_lsn = waiting_servers.sum { |s| s.last_known_lsn ? s.lsn2int(s.last_known_lsn) : 0 }
 
     previous_total_disk_usage = strand.stack.first["total_disk_usage"] || 0
     previous_total_lsn = strand.stack.first["total_lsn"] || 0
@@ -130,7 +121,7 @@ class Prog::Postgres::ConvergePostgresResource < Prog::Base
 
       # Acquire advisory lock to prevent race with cancel_storage_auto_scale
       nap 5 unless DB.get(Sequel.function(:pg_try_advisory_xact_lock, postgres_resource.storage_auto_scale_lock_key))
-      postgres_resource.incr_storage_auto_scale_not_cancellable
+      postgres_resource.incr_storage_auto_scale_not_cancellable unless postgres_resource.storage_auto_scale_not_cancellable_set?
 
       register_deadline(nil, 10 * 60)
       postgres_resource.representative_server.trigger_failover(mode: "planned")

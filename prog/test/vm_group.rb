@@ -3,14 +3,13 @@
 require_relative "../../lib/net_ssh"
 
 class Prog::Test::VmGroup < Prog::Test::Base
-  def self.assemble(boot_images:, test_reboot: true, test_slices: false, verify_host_capacity: true)
+  def self.assemble(boot_images:, test_reboot: true, verify_host_capacity: true)
     Strand.create(
       prog: "Test::VmGroup",
       label: "start",
       stack: [{
         "test_reboot" => test_reboot,
         "first_boot" => true,
-        "test_slices" => test_slices,
         "vms" => [],
         "boot_images" => boot_images,
         "verify_host_capacity" => verify_host_capacity,
@@ -24,9 +23,7 @@ class Prog::Test::VmGroup < Prog::Test::Base
 
   label def setup_vms
     project = Project.create(name: "project-1")
-    test_slices = frame.fetch("test_slices")
-
-    size_options = test_slices ? ["standard-2", "burstable-1"] : ["standard-2"]
+    size_options = ["standard-2", "burstable-1"]
     subnets = Array.new(2) { Prog::Vnet::SubnetNexus.assemble(project.id, name: "subnet-#{it}", location_id: Location::HETZNER_FSN1_ID) }
     encrypted = true
     boot_images = frame.fetch("boot_images")
@@ -81,26 +78,12 @@ class Prog::Test::VmGroup < Prog::Test::Base
   end
 
   label def verify_vm_host_slices
-    test_slices = frame.fetch("test_slices")
-
-    if !test_slices || (retval&.dig("msg") == "Verified VM Host Slices!")
-      hop_verify_storage_rpc
+    if retval&.dig("msg") == "Verified VM Host Slices!"
+      hop_verify_firewall_rules
     end
 
     slices = frame["vms"].map { Vm[it].vm_host_slice&.id }.reject(&:nil?)
     push Prog::Test::VmHostSlices, {"slices" => slices}
-  end
-
-  label def verify_storage_rpc
-    frame["vms"].each do |id|
-      vm = Vm[id]
-      command = {command: "version"}.to_json
-      response = vm_host.sshable.cmd_json("sudo nc -U /var/storage/:inhost_name/0/rpc.sock -q 0", inhost_name: vm.inhost_name, stdin: command)
-      expected_version = Config.vhost_block_backend_version.delete_prefix("v")
-      fail_test "Failed to get vhost-block-backend version for VM #{vm.id} using RPC" unless response["version"] == expected_version
-    end
-
-    hop_verify_firewall_rules
   end
 
   label def verify_firewall_rules

@@ -31,23 +31,11 @@ RSpec.describe Prog::Test::VmGroup do
     it "provisions at least one vm for each boot image" do
       expect(vg_test).to receive(:update_stack).and_call_original
       refresh_frame(vg_test, new_values: {
-        "test_slices" => true,
         "boot_images" => ["ubuntu-noble", "ubuntu-jammy", "debian-12", "almalinux-9"],
       })
       expect { vg_test.setup_vms }.to hop("wait_vms")
       vm_images = vg_test.strand.stack.first["vms"].map { Vm[it].boot_image }
       expect(vm_images).to eq(["ubuntu-noble", "ubuntu-jammy", "debian-12", "almalinux-9"])
-    end
-
-    it "hops to wait_vms if test_slices" do
-      expect(vg_test).to receive(:update_stack).and_call_original
-      refresh_frame(vg_test, new_values: {
-        "test_reboot" => true,
-        "test_slices" => true,
-        "vms" => [],
-        "boot_images" => ["ubuntu-noble", "ubuntu-jammy", "debian-12", "almalinux-9"],
-      })
-      expect { vg_test.setup_vms }.to hop("wait_vms")
     end
   end
 
@@ -133,43 +121,14 @@ RSpec.describe Prog::Test::VmGroup do
       vm1 = create_vm(vm_host_id: vm_host.id, vm_host_slice_id: slice1.id, name: "test-vm-1")
       vm2 = create_vm(vm_host_id: vm_host.id, vm_host_slice_id: slice2.id, name: "test-vm-2")
       vm3 = create_vm(vm_host_id: vm_host.id, name: "test-vm-3")
-      refresh_frame(vg_test, new_values: {"test_slices" => true, "vms" => [vm1.id, vm2.id, vm3.id]})
+      refresh_frame(vg_test, new_values: {"vms" => [vm1.id, vm2.id, vm3.id]})
 
       expect { vg_test.verify_vm_host_slices }.to hop("start", "Test::VmHostSlices")
     end
 
-    it "hops to verify_storage_rpc if tests are done" do
-      refresh_frame(vg_test, new_values: {"test_slices" => true})
+    it "hops to verify_firewall_rules if tests are done" do
       st.retval = {"msg" => "Verified VM Host Slices!"}
-      expect { vg_test.verify_vm_host_slices }.to hop("verify_storage_rpc")
-    end
-  end
-
-  describe "#verify_storage_rpc" do
-    it "verifies vhost-block-backend version for each vm using RPC" do
-      command = {command: "version"}.to_json
-      expected_response = {version: Config.vhost_block_backend_version.delete_prefix("v")}.to_json + "\n"
-      vm_host = create_vm_host
-      vm1 = create_vm(vm_host_id: vm_host.id, name: "test-vm-1")
-      vm2 = create_vm(vm_host_id: vm_host.id, name: "test-vm-2")
-      refresh_frame(vg_test, new_values: {"vms" => [vm1.id, vm2.id]})
-
-      expect(vg_test.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm1.inhost_name}/0/rpc.sock -q 0", stdin: command).and_return(expected_response)
-      expect(vg_test.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm2.inhost_name}/0/rpc.sock -q 0", stdin: command).and_return(expected_response)
-
-      expect { vg_test.verify_storage_rpc }.to hop("verify_firewall_rules")
-    end
-
-    it "fails if unable to get vhost-block-backend version using RPC" do
-      command = {command: "version"}.to_json
-      vm_host = create_vm_host
-      vm1 = create_vm(vm_host_id: vm_host.id, name: "test-vm-1")
-      refresh_frame(vg_test, new_values: {"vms" => [vm1.id]})
-
-      expect(vg_test.vm_host.sshable).to receive(:_cmd).with("sudo nc -U /var/storage/#{vm1.inhost_name}/0/rpc.sock -q 0", stdin: command).and_return("{\"error\": \"some error\"}\n")
-
-      expect { vg_test.verify_storage_rpc }.to hop("failed")
-      expect(st.reload.exitval).to eq({"msg" => "Failed to get vhost-block-backend version for VM #{vm1.id} using RPC"})
+      expect { vg_test.verify_vm_host_slices }.to hop("verify_firewall_rules")
     end
   end
 

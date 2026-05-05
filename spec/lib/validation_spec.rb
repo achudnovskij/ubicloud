@@ -31,6 +31,20 @@ RSpec.describe Validation do
       end
     end
 
+    describe "#validate_machine_image_version_label" do
+      it "valid labels" do
+        ["v1", "v1.0", "20260423120000", "release-1.2.3_rc4", "a" * 64].each do |v|
+          expect(described_class.validate_machine_image_version_label(v)).to be_nil
+        end
+      end
+
+      it "invalid labels" do
+        [nil, "", "-bad", ".bad", "bad/version", "with space", "a" * 65].each do |v|
+          expect { described_class.validate_machine_image_version_label(v) }.to raise_error described_class::ValidationFailed
+        end
+      end
+    end
+
     describe "#validate_vm_size" do
       it "valid vm size" do
         expect(described_class.validate_vm_size("standard-2", "x64").name).to eq("standard-2")
@@ -273,6 +287,7 @@ RSpec.describe Validation do
       it "valid boot image" do
         expect { described_class.validate_boot_image("ubuntu-jammy") }.not_to raise_error
         expect { described_class.validate_boot_image("almalinux-9") }.not_to raise_error
+        expect { described_class.validate_boot_image("my-image@latest") }.not_to raise_error
       end
 
       it "invalid boot image" do
@@ -368,6 +383,108 @@ RSpec.describe Validation do
       ].each do |url|
         expect { described_class.validate_url(url) }.to raise_error described_class::ValidationFailed
       end
+    end
+  end
+
+  describe "#validate_syslog_url" do
+    it "valid urls" do
+      [
+        "tcp://logs.example.com:6514",
+        "tcp://192.168.1.1:1",
+        "tcp://logs.example.com:65535",
+      ].each do |url|
+        expect(described_class.validate_syslog_url(url)).to be_nil
+      end
+    end
+
+    it "rejects non-tcp schemes" do
+      ["https://logs.example.com:6514", "syslog://logs.example.com:6514"].each do |url|
+        expect { described_class.validate_syslog_url(url) }.to raise_error { |e|
+          expect(e).to be_a(described_class::ValidationFailed)
+          expect(e.details[:url]).to match(/Only tcp URLs are supported/)
+        }
+      end
+    end
+
+    it "rejects missing host" do
+      ["tcp://:6514", "tcp:something"].each do |url|
+        expect { described_class.validate_syslog_url(url) }.to raise_error described_class::ValidationFailed
+      end
+    end
+
+    it "rejects missing port" do
+      expect { described_class.validate_syslog_url("tcp://logs.example.com") }.to raise_error described_class::ValidationFailed
+    end
+
+    it "rejects port out of range" do
+      ["tcp://logs.example.com:0", "tcp://logs.example.com:99999"].each do |url|
+        expect { described_class.validate_syslog_url(url) }.to raise_error { |e|
+          expect(e).to be_a(described_class::ValidationFailed)
+          expect(e.details[:url]).to match(/port must be between 1 and 65535/)
+        }
+      end
+    end
+
+    it "rejects invalid URI" do
+      expect { described_class.validate_syslog_url("not a url") }.to raise_error described_class::ValidationFailed
+    end
+  end
+
+  describe "#validate_log_destination_options" do
+    it "accepts nil options" do
+      expect(described_class.validate_log_destination_options("otlp", nil)).to be_nil
+      expect(described_class.validate_log_destination_options("syslog", nil)).to be_nil
+    end
+
+    it "accepts valid otlp headers" do
+      expect(described_class.validate_log_destination_options("otlp", {"headers" => {"api-key" => "secret"}})).to be_nil
+    end
+
+    it "accepts valid syslog structured_data" do
+      expect(described_class.validate_log_destination_options("syslog", {"structured_data" => {"provider@123" => {"key" => "val"}}})).to be_nil
+    end
+
+    it "accepts empty options hash for otlp" do
+      expect(described_class.validate_log_destination_options("otlp", {})).to be_nil
+    end
+
+    it "accepts empty options hash for syslog" do
+      expect(described_class.validate_log_destination_options("syslog", {})).to be_nil
+    end
+
+    it "rejects unknown keys for otlp" do
+      expect { described_class.validate_log_destination_options("otlp", {"structured_data" => {}}) }.to raise_error { |e|
+        expect(e).to be_a(described_class::ValidationFailed)
+        expect(e.details[:options]).to match(/may only contain 'headers'/)
+      }
+    end
+
+    it "rejects unknown keys for syslog" do
+      expect { described_class.validate_log_destination_options("syslog", {"headers" => {}}) }.to raise_error { |e|
+        expect(e).to be_a(described_class::ValidationFailed)
+        expect(e.details[:options]).to match(/may only contain 'structured_data'/)
+      }
+    end
+
+    it "rejects non-string header values" do
+      expect { described_class.validate_log_destination_options("otlp", {"headers" => {"key" => 123}}) }.to raise_error { |e|
+        expect(e).to be_a(described_class::ValidationFailed)
+        expect(e.details[:options]).to match(/flat object with string values/)
+      }
+    end
+
+    it "rejects structured_data with non-hash SD-ID values" do
+      expect { described_class.validate_log_destination_options("syslog", {"structured_data" => {"id" => "not-a-hash"}}) }.to raise_error { |e|
+        expect(e).to be_a(described_class::ValidationFailed)
+        expect(e.details[:options]).to match(/SD-IDs to key\/value objects/)
+      }
+    end
+
+    it "rejects structured_data with non-string leaf values" do
+      expect { described_class.validate_log_destination_options("syslog", {"structured_data" => {"id" => {"key" => 99}}}) }.to raise_error { |e|
+        expect(e).to be_a(described_class::ValidationFailed)
+        expect(e.details[:options]).to match(/SD-IDs to key\/value objects/)
+      }
     end
   end
 

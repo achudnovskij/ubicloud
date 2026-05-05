@@ -159,6 +159,27 @@ RSpec.describe InvoiceGenerator do
     expect(invoices.count).to eq(0)
   end
 
+  it "caps combined duration across records sharing a (resource_id, slot) tag" do
+    billing_rate_id = BillingRate.from_resource_properties("VmVCpu", vm1.family, vm1.location.name)["id"]
+    BillingRecord.create(
+      project_id: p1.id, resource_id: vm1.id, resource_name: vm1.name,
+      billing_rate_id:, amount: vm1.vcpus,
+      span: Sequel::Postgres::PGRange.new(begin_time, begin_time + 15 * day),
+      resource_tags: {"slot" => "primary-vcpu"},
+    )
+    BillingRecord.create(
+      project_id: p1.id, resource_id: vm1.id, resource_name: vm1.name,
+      billing_rate_id:, amount: vm1.vcpus,
+      span: Sequel::Postgres::PGRange.new(begin_time + 15 * day, begin_time + 30 * day),
+      resource_tags: {"slot" => "primary-vcpu"},
+    )
+
+    invoices = described_class.new(begin_time, end_time).run
+    line_items = invoices.first.content["resources"].first["line_items"]
+    total_duration = line_items.sum { it["duration"] }
+    expect(total_duration).to eq(672 * 60)
+  end
+
   context "when project has billing info" do
     let(:customers_service) { instance_double(Stripe::CustomerService) }
 
@@ -181,8 +202,8 @@ RSpec.describe InvoiceGenerator do
       p1.update(billing_info_id: BillingInfo.create(stripe_id: "cs_1234567890").id)
 
       generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time - 90 * day, nil))
-      invoices = described_class.new(begin_time, end_time, eur_rate: 1.1).run
-      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 5.166, "eur_rate" => 1.1, "rate" => 21, "reversed" => false})
+      invoices = described_class.new(begin_time, end_time, eur_rate: 0.85).run
+      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 6.509, "eur_rate" => 0.85, "rate" => 21, "reversed" => false})
     end
 
     it "charges 21% VAT for Dutch customer without tax id" do
@@ -190,8 +211,8 @@ RSpec.describe InvoiceGenerator do
       p1.update(billing_info_id: BillingInfo.create(stripe_id: "cs_1234567890").id)
 
       generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time - 90 * day, nil))
-      invoices = described_class.new(begin_time, end_time, eur_rate: 1.1).run
-      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 5.166, "eur_rate" => 1.1, "rate" => 21, "reversed" => false})
+      invoices = described_class.new(begin_time, end_time, eur_rate: 0.85).run
+      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 6.509, "eur_rate" => 0.85, "rate" => 21, "reversed" => false})
     end
 
     it "reverse charges VAT for non-Dutch EU customer with tax id" do
@@ -209,8 +230,8 @@ RSpec.describe InvoiceGenerator do
       p1.update(billing_info_id: BillingInfo.create(stripe_id: "cs_1234567890").id)
 
       generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time - 90 * day, nil))
-      invoices = described_class.new(begin_time, end_time, eur_rate: 1.1).run
-      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 5.166, "eur_rate" => 1.1, "rate" => 21, "reversed" => false})
+      invoices = described_class.new(begin_time, end_time, eur_rate: 0.85).run
+      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 6.509, "eur_rate" => 0.85, "rate" => 21, "reversed" => false})
     end
 
     it "charges local VAT for non-Dutch EU customer without tax id if threshold exceeds" do
@@ -219,15 +240,15 @@ RSpec.describe InvoiceGenerator do
       p1.update(billing_info_id: BillingInfo.create(stripe_id: "cs_1234567890").id)
 
       generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time - 90 * day, nil))
-      invoices = described_class.new(begin_time, end_time, eur_rate: 1.1).run
-      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 4.674, "eur_rate" => 1.1, "rate" => 19, "reversed" => false})
+      invoices = described_class.new(begin_time, end_time, eur_rate: 0.85).run
+      check_invoice_for_single_vm(invoices, p1, vm1, 30 * day, begin_time - 90 * day, expected_vat_info: {"amount" => 5.889, "eur_rate" => 0.85, "rate" => 19, "reversed" => false})
     end
 
     it "charges no VAT if the total is less than minimum invoice charge threshold" do
       expect(customers_service).to receive(:retrieve).with("cs_1234567890").and_return({"name" => "ACME Inc.", "metadata" => {}, "address" => {"line1" => "123 Main St", "country" => "DE"}}).at_least(:once)
       p1.update(billing_info_id: BillingInfo.create(stripe_id: "cs_1234567890").id)
 
-      generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time, begin_time + 0.5 * day), 2)
+      generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time, begin_time + 0.2 * day), 2)
       invoices = described_class.new(begin_time, end_time).run
       expect(invoices.first.content["vat_info"]).to be_nil
     end
@@ -340,7 +361,7 @@ RSpec.describe InvoiceGenerator do
     p1.update(credit: 10, discount: 10)
     after = described_class.new(begin_time, end_time, save_result: true, eur_rate: 1.1).run.first.content
 
-    expect(before["cost"]).to eq(before["subtotal"] - 1)
+    expect(before["cost"]).to eq(before["subtotal"].round(3) - 1)
     expect(after["cost"]).to eq((before["subtotal"] * 0.9 - 11).round(3))
     expect(after["discount"]).to eq((before["subtotal"] * 0.1).round(3))
     expect(after["credit"]).to eq(11)
@@ -409,6 +430,97 @@ RSpec.describe InvoiceGenerator do
     expect(invoice["free_inference_tokens_credit"]).to eq(free_inference_tokens * billing_rate2)
     expect(invoice["cost"]).to eq((800000 - free_inference_tokens) * billing_rate2 + 100000 * billing_rate1)
     expect(invoice["resources"].count).to eq(2)
+  end
+
+  context "with resource discounts" do
+    let(:billing_rate) { BillingRate.from_resource_properties("VmVCpu", vm1.family, vm1.location.name) }
+    let(:gross_cost) { (vm1.vcpus * 672 * 60 * billing_rate["unit_price"]).round(3) }
+
+    before do
+      generate_billing_record(p1, vm1, Sequel::Postgres::PGRange.new(begin_time - 90 * day, end_time + 90 * day))
+    end
+
+    it "applies a resource_type-scoped discount to the matching line item" do
+      ResourceDiscount.create(
+        project_id: p1.id, resource_type: "VmVCpu",
+        discount_percent: 20, active_from: Time.utc(2023, 5),
+      )
+
+      invoice = described_class.new(begin_time, end_time).run.first.content
+      line_item = invoice["resources"].first["line_items"].first
+      expected_discount = (gross_cost * 0.2).round(3)
+
+      expect(line_item["cost"]).to eq(gross_cost)
+      expect(line_item["discount"]["percent"]).to eq(20.0)
+      expect(line_item["discount"]["amount"]).to eq(expected_discount)
+      expect(invoice["resources"].first["cost"]).to eq((gross_cost - expected_discount).round(3))
+      expect(invoice["subtotal"]).to eq((gross_cost - expected_discount).round(3))
+    end
+
+    it "does not apply when resource_family differs" do
+      ResourceDiscount.create(
+        project_id: p1.id, resource_type: "VmVCpu", resource_family: "other-family",
+        discount_percent: 20, active_from: Time.utc(2023, 5),
+      )
+
+      invoice = described_class.new(begin_time, end_time).run.first.content
+      expect(invoice["resources"].first["line_items"].first).not_to have_key("discount")
+      expect(invoice["subtotal"]).to eq(gross_cost)
+    end
+
+    it "does not apply when the discount is not yet active at the window start" do
+      ResourceDiscount.create(
+        project_id: p1.id, resource_type: "VmVCpu",
+        discount_percent: 20, active_from: Time.utc(2023, 8),
+      )
+
+      invoice = described_class.new(begin_time, end_time).run.first.content
+      expect(invoice["resources"].first["line_items"].first).not_to have_key("discount")
+    end
+
+    it "does not apply when the discount has already ended at the window start" do
+      ResourceDiscount.create(
+        project_id: p1.id, resource_type: "VmVCpu",
+        discount_percent: 20,
+        active_from: Time.utc(2023, 4), active_to: Time.utc(2023, 6),
+      )
+
+      invoice = described_class.new(begin_time, end_time).run.first.content
+      expect(invoice["resources"].first["line_items"].first).not_to have_key("discount")
+    end
+
+    it "stacks with the project-level discount and credit" do
+      ResourceDiscount.create(
+        project_id: p1.id, resource_type: "VmVCpu",
+        discount_percent: 20, active_from: Time.utc(2023, 5),
+      )
+      p1.update(discount: 10, credit: 1)
+
+      invoice = described_class.new(begin_time, end_time, save_result: true, eur_rate: 1.1).run.first.content
+      net_after_resource_discount = (gross_cost * 0.8).round(3)
+      expected_project_discount = (net_after_resource_discount * 0.1).round(3)
+      expected_cost = (net_after_resource_discount - expected_project_discount - 1).round(3)
+
+      expect(invoice["subtotal"]).to eq(net_after_resource_discount)
+      expect(invoice["discount"]).to eq(expected_project_discount)
+      expect(invoice["credit"]).to eq(1)
+      expect(invoice["cost"]).to eq(expected_cost)
+    end
+
+    it "applies a resource_id-scoped discount only to that resource" do
+      vm2 = create_vm
+      generate_billing_record(p1, vm2, Sequel::Postgres::PGRange.new(begin_time - 90 * day, end_time + 90 * day))
+      ResourceDiscount.create(
+        project_id: p1.id, resource_id: vm1.id, resource_type: "VmVCpu",
+        discount_percent: 50, active_from: Time.utc(2023, 5),
+      )
+
+      invoice = described_class.new(begin_time, end_time).run.first.content
+      resources = invoice["resources"].to_h { [it["resource_id"], it] }
+
+      expect(resources[vm1.id]["line_items"].first["discount"]["percent"]).to eq(50.0)
+      expect(resources[vm2.id]["line_items"].first).not_to have_key("discount")
+    end
   end
 
   it "handles inference quota with two different models on different days" do

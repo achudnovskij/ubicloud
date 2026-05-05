@@ -3,37 +3,14 @@
 require_relative "../../lib/util"
 
 class Prog::Test::PostgresResource < Prog::Test::PostgresBase
-  def self.assemble(provider: "metal")
-    postgres_test_project = Project.create(name: "Postgres-Test-Project")
-    postgres_service_project = Project[Config.postgres_service_project_id] ||
-      Project.create_with_id(Config.postgres_service_project_id || Project.generate_uuid, name: "Postgres-Service-Project")
+  semaphore :pause, :destroy
 
-    frame = {
-      "provider" => provider,
-      "postgres_service_project_id" => postgres_service_project.id,
-      "postgres_test_project_id" => postgres_test_project.id,
-    }
-
-    Strand.create(
-      prog: "Test::PostgresResource",
-      label: "start",
-      stack: [frame],
-    )
+  def self.assemble(provider: "metal", **)
+    super(provider:, project_name: "Postgres-Test-Project", **)
   end
 
   label def start
-    location_id, target_vm_size, target_storage_size_gib = self.class.postgres_test_location_options(frame["provider"])
-
-    st = Prog::Postgres::PostgresResourceNexus.assemble(
-      project_id: frame["postgres_test_project_id"],
-      location_id:,
-      name: "postgres-test-standard",
-      target_vm_size:,
-      target_storage_size_gib:,
-    )
-
-    update_stack({"postgres_resource_id" => st.id})
-    hop_wait_postgres_resource
+    super(name: "postgres-test-standard")
   end
 
   label def wait_postgres_resource
@@ -50,7 +27,7 @@ class Prog::Test::PostgresResource < Prog::Test::PostgresBase
       update_stack({"fail_message" => "Failed to run test queries"})
     end
 
-    hop_destroy_postgres
+    hop_destroy
   end
 
   label def destroy_postgres
@@ -61,19 +38,11 @@ class Prog::Test::PostgresResource < Prog::Test::PostgresBase
 
   label def wait_resources_destroyed
     nap 5 if postgres_resource
-    if PrivateSubnet[project_id: frame["postgres_test_project_id"]]
-      Clog.emit("Waiting for private subnet to be destroyed")
-      nap 5
-    end
-
+    nap_if_private_subnet
     hop_finish
   end
 
-  label def finish
-    finish_test("Postgres tests are finished!")
-  end
-
-  label def failed
-    nap 15
-  end
+  label :finish
+  label :failed
+  label :destroy
 end

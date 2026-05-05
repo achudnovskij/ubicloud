@@ -12,8 +12,7 @@ class Prog::Vm::Nexus < Prog::Base
     distinct_storage_devices: false, force_host_id: nil, exclude_host_ids: [], gpu_count: 0, gpu_device: nil,
     hugepages: true, hypervisor: nil, ch_version: nil, firmware_version: nil, new_private_subnet_name: nil,
     exclude_availability_zones: [], availability_zone: nil, alternative_families: [],
-    allow_private_subnet_in_other_project: false, init_script: nil, exclude_data_centers: [],
-    machine_image_version_id: nil)
+    allow_private_subnet_in_other_project: false, init_script: nil, exclude_data_centers: [])
 
     unless (project = Project[project_id])
       fail "No existing project"
@@ -24,16 +23,6 @@ class Prog::Vm::Nexus < Prog::Base
 
     unless (location = (allow_private_subnet_in_other_project ? Location : Location.for_project(project_id)).with_pk(location_id))
       fail "No existing location in project"
-    end
-
-    if machine_image_version_id
-      fail "Machine images are only supported for metal locations" unless location.provider_dispatcher_group_name == "metal"
-      miv_metal = MachineImageVersionMetal[machine_image_version_id]
-      fail "No existing machine image version metal" unless miv_metal
-      fail "Boot image cannot be specified when using machine image version" if boot_image
-      miv = miv_metal.machine_image_version
-      mi = miv.machine_image
-      boot_image = "#{mi.name}@#{miv.version}"
     end
 
     vm_size = Validation.validate_vm_size(size, arch)
@@ -54,7 +43,6 @@ class Prog::Vm::Nexus < Prog::Base
           volume[:size_gib] <= Config.machine_image_max_size_gib
       end
       volume[:boot] = disk_index == boot_disk_index
-      volume[:machine_image_version_id] = machine_image_version_id if volume[:boot] && machine_image_version_id
 
       if volume[:read_only]
         volume[:size_gib] = 0
@@ -64,6 +52,14 @@ class Prog::Vm::Nexus < Prog::Base
     end
 
     Validation.validate_storage_volumes(storage_volumes, boot_disk_index)
+
+    if boot_image.include?("@")
+      fail "Machine images are only supported for metal locations" unless location.provider_dispatcher_group_name == "metal"
+      image_name, image_version = boot_image.split("@", 2)
+      boot_volume = storage_volumes[boot_disk_index]
+      machine_image_version = lookup_machine_image_version(project_id, location_id, image_name, image_version, boot_volume[:size_gib])
+      boot_volume[:machine_image_version_id] = machine_image_version.id
+    end
 
     ubid = Vm.generate_ubid
     name ||= Vm.ubid_to_name(ubid)
@@ -201,5 +197,22 @@ class Prog::Vm::Nexus < Prog::Base
     st = assemble(ssh_key.public_key, *, **kwargs)
     Sshable.create_with_id(st, unix_user: sshable_unix_user, host: "temp_#{st.id}", raw_private_key_1: ssh_key.keypair)
     st
+  end
+
+  def self.lookup_machine_image_version(project_id, location_id, name, version, vm_boot_disk_size_gib)
+    mi = MachineImage.first(project_id:, location_id:, name:)
+    fail Validation::ValidationFailed.new({machine_image: "Machine image with name \"#{name}\" does not exist in the specified project and location"}) unless mi
+
+    miv = if version == "latest"
+      mi.latest_version
+    else
+      MachineImageVersion.first(machine_image_id: mi.id, version:)
+    end
+
+    fail Validation::ValidationFailed.new({machine_image_version: "Version \"#{version}\" does not exist for machine image \"#{name}\""}) unless miv
+    fail Validation::ValidationFailed.new({machine_image_version: "Machine image version \"#{version}\" does not have an active metal version"}) unless miv.metal&.enabled
+    fail Validation::ValidationFailed.new({machine_image_version: "Machine image version \"#{version}\" is larger than the VM boot disk size"}) if miv.actual_size_mib > vm_boot_disk_size_gib * 1024
+
+    miv
   end
 end

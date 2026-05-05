@@ -81,18 +81,21 @@ class Prog::Postgres::PostgresServerNexus < Prog::Base
 
   def before_run
     when_destroy_set? do
-      is_destroying = ["destroy", nil].include?(resource&.strand&.label)
+      is_resource_destroying = resource.nil? || resource.destroy_set? || resource.destroying_set?
 
-      if is_destroying || !postgres_server.taking_over?
-        if !%w[destroy wait_children_destroy destroy_vm_and_pg].include?(strand.label)
-          hop_destroy
-        elsif strand.stack.count > 1
-          pop "operation is cancelled due to the destruction of the postgres server"
-        end
-      else
+      if !is_resource_destroying && postgres_server.is_representative
+        Clog.emit("Postgres server deletion is cancelled, because it is the representative server of an alive resource; flip is_representative=false (via a proper failover) before destroying.", {ubid: postgres_server.ubid, resource_ubid: resource.ubid})
+        decr_destroy
+        return
+      end
+
+      if !is_resource_destroying && postgres_server.taking_over?
         Clog.emit("Postgres server deletion is cancelled, because it is in the process of taking over the primary role")
         decr_destroy
+        return
       end
+
+      hop_destroy unless destroying_set?
     end
   end
 
@@ -200,11 +203,7 @@ class Prog::Postgres::PostgresServerNexus < Prog::Base
       delete_from_stack("disk_usage", "initialize_database_from_backup_try_count")
       hop_refresh_certificates
     when "InProgress"
-      disk_usage = begin
-        vm.sshable.cmd("df --output=used /dat | tail -n 1").strip.to_i
-      rescue
-        0
-      end
+      disk_usage = postgres_server.data_disk_usage
       previous_disk_usage = frame["disk_usage"] || 0
       if disk_usage > previous_disk_usage
         update_stack({"disk_usage" => disk_usage})
@@ -390,8 +389,7 @@ TIMER
       vm.sshable.cmd("sudo systemctl enable --now wal-g") if postgres_server.timeline.blob_storage && !postgres_server.resource.use_old_walg_command_set?
       vm.sshable.cmd("sudo systemctl enable --now otelcol-contrib") if Config.postgres_otel_otlp_export_enabled
 
-      hop_setup_cloudwatch if postgres_server.timeline.aws? && postgres_server.resource.project.get_ff_aws_cloudwatch_logs
-      hop_setup_hugepages
+      hop_configure_logs
     end
 
     vm.sshable.cmd("sudo systemctl reload postgres_exporter || sudo systemctl restart postgres_exporter")
@@ -400,6 +398,21 @@ TIMER
     vm.sshable.cmd("sudo systemctl reload otelcol-contrib || sudo systemctl restart otelcol-contrib") if Config.postgres_otel_otlp_export_enabled
 
     hop_wait
+  end
+
+  label def configure_logs
+    case vm.sshable.d_check("configure_logs")
+    when "Succeeded"
+      vm.sshable.d_clean("configure_logs")
+      when_initial_provisioning_set? do
+        hop_setup_cloudwatch if postgres_server.timeline.aws? && resource.project.get_ff_aws_cloudwatch_logs
+        hop_setup_hugepages
+      end
+      hop_wait
+    when "Failed", "NotStarted"
+      vm.sshable.d_run("configure_logs", "/home/ubi/postgres/bin/configure-logs", stdin: postgres_server.logs_config.to_json)
+    end
+    nap 5
   end
 
   label def setup_cloudwatch
@@ -533,23 +546,32 @@ SQL
   end
 
   label def wait_catch_up
-    unless postgres_server.lsn_caught_up
-      current_lsn = postgres_server.current_lsn
-      previous_lsn = strand.stack.first["current_lsn"]
-      if previous_lsn.nil? || postgres_server.lsn_diff(current_lsn, previous_lsn) > 0
-        update_stack({"current_lsn" => current_lsn})
-        register_deadline("wait", 10 * 60, allow_extension: 24 * 60 * 60)
-      end
-      nap 30
+    if postgres_server.lsn_caught_up
+      delete_from_stack("previous_lsn", "previous_disk_usage")
+      hop_wait if postgres_server.read_replica?
+
+      postgres_server.update(synchronization_status: "ready")
+
+      resource.representative_server.incr_configure
+      hop_wait_synchronization if resource.ha_type == PostgresResource::HaType::SYNC
+      hop_wait
     end
 
-    hop_wait if postgres_server.read_replica?
-
-    postgres_server.update(synchronization_status: "ready")
-
-    resource.representative_server.incr_configure
-    hop_wait_synchronization if resource.ha_type == PostgresResource::HaType::SYNC
-    hop_wait
+    if (current_lsn = postgres_server.last_known_lsn)
+      previous_lsn = strand.stack.first["previous_lsn"]
+      if previous_lsn.nil? || postgres_server.lsn_diff(current_lsn, previous_lsn) > 0
+        update_stack({"previous_lsn" => current_lsn})
+        register_deadline("wait", 10 * 60, allow_extension: 24 * 60 * 60)
+      end
+    else
+      disk_usage = postgres_server.data_disk_usage
+      previous_disk_usage = strand.stack.first["previous_disk_usage"] || 0
+      if disk_usage > previous_disk_usage
+        update_stack({"previous_disk_usage" => disk_usage})
+        register_deadline("wait", 10 * 60, allow_extension: 24 * 60 * 60)
+      end
+    end
+    nap 30
   end
 
   label def wait_synchronization
@@ -642,6 +664,11 @@ SQL
     when_configure_metrics_set? do
       decr_configure_metrics
       hop_configure_metrics
+    end
+
+    when_configure_logs_set? do
+      decr_configure_logs
+      hop_configure_logs
     end
 
     when_promote_read_replica_set? do
@@ -826,8 +853,7 @@ SQL
     case vm.sshable.d_check("promote_postgres")
     when "Succeeded"
       vm.sshable.d_clean("promote_postgres")
-      resource.servers.each(&:incr_configure)
-      resource.servers.each(&:incr_configure_metrics)
+      resource.server_incr("configure", "configure_metrics", "configure_logs")
       hop_configure
     when "NotStarted", "Failed"
       vm.sshable.d_run("promote_postgres", "sudo", "postgres/bin/promote", postgres_server.version)
@@ -840,7 +866,7 @@ SQL
     if postgres_server.read_replica?
       resource.representative_server.update(is_representative: false)
       postgres_server.reload.update(is_representative: true, synchronization_status: "ready")
-      resource.servers.each(&:incr_configure_metrics)
+      resource.server_incr("configure_metrics", "configure_logs")
       resource.incr_refresh_dns_record
       hop_configure
     end
@@ -852,9 +878,7 @@ SQL
       resource.representative_server.incr_destroy
       postgres_server.update(timeline_access: "push", is_representative: true, synchronization_status: "ready")
       resource.incr_refresh_dns_record
-      resource.servers.each(&:incr_configure)
-      resource.servers.each(&:incr_configure_metrics)
-      resource.servers.each(&:incr_restart)
+      resource.server_incr("configure", "configure_metrics", "configure_logs", "restart")
       resource.servers.reject(&:primary?).each { it.update(synchronization_status: "catching_up") }
       hop_configure
     when "Failed"

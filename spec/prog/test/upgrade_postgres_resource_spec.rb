@@ -3,7 +3,9 @@
 require_relative "../../model/spec_helper"
 
 RSpec.describe Prog::Test::UpgradePostgresResource do
-  subject(:pgr_test) { described_class.new(described_class.assemble) }
+  subject(:pgr_test) { described_class.new(pgr_strand) }
+
+  let(:pgr_strand) { described_class.assemble }
 
   let(:postgres_service_project_id) { "546a1ed8-53e5-86d2-966c-fb782d2ae3ab" }
   let(:minio_service_project_id) { "f7207bf6-a031-4c98-aee6-4bb9cb03e821" }
@@ -21,6 +23,17 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
       expect(st).to be_a Strand
       expect(st.label).to eq("start")
       expect(Project[name: "Postgres-Upgrade-Test-Project"]).not_to be_nil
+    end
+  end
+
+  describe "#before_run" do
+    it "naps if pause is set" do
+      Semaphore.incr(pgr_strand.id, "pause")
+      expect { pgr_test.before_run }.to nap(60 * 60)
+    end
+
+    it "does nothing if pause is not set" do
+      expect(pgr_test.before_run).to be_nil
     end
   end
 
@@ -73,7 +86,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "fails if the postgres test fails" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
-      expect { pgr_test.test_postgres_before_read_replica }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_before_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run test queries before read replica")
     end
@@ -128,7 +141,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "fails if read queries on primary fail before upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
-      expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on primary before upgrade")
     end
@@ -136,7 +149,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     it "fails if read queries on replica fail before upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
       allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
-      expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_with_read_replica }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on replica before upgrade")
     end
@@ -181,7 +194,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "fails if any servers are in failed state" do
       pgr_test.postgres_resource.servers.first.strand.update(label: "failed")
-      expect { pgr_test.check_upgrade_progress }.to hop("destroy_postgres")
+      expect { pgr_test.check_upgrade_progress }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Upgrade failed: some servers are in failed state")
     end
@@ -290,21 +303,21 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
 
     it "fails if not all primary servers are at version 18" do
       pgr_test.postgres_resource.servers.first.update(version: "17")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Not all primary servers upgraded to version 18")
     end
 
     it "fails if not all replica servers are at version 18" do
       pgr_test.read_replica.servers.first.update(version: "17")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Not all replica servers upgraded to version 18")
     end
 
     it "fails if read queries on primary fail after upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on primary after upgrade")
     end
@@ -312,7 +325,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     it "fails if read queries on replica fail after upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
       allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run read queries on replica after upgrade")
     end
@@ -320,7 +333,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     it "fails if write queries on primary fail after upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
       allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to run write queries after upgrade")
     end
@@ -328,15 +341,15 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
     it "fails if replica cannot read updated data after upgrade" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
       allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to eq("Failed to read updated data on replica after upgrade")
     end
 
-    it "hops to destroy_postgres if all tests pass" do
+    it "hops to destroy if all tests pass" do
       allow(pgr_test.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "DROP TABLE\nCREATE TABLE\nINSERT 0 10\n4159.90\n415.99\n4.1")
       allow(pgr_test.read_replica.representative_server).to receive(:_run_query).and_return("4159.90\n415.99\n4.1", "4159.90\n415.99\n4.1")
-      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy_postgres")
+      expect { pgr_test.test_postgres_after_upgrade }.to hop("destroy")
       refresh_frame(pgr_test)
       expect(frame_value(pgr_test, "fail_message")).to be_nil
     end
@@ -384,7 +397,7 @@ RSpec.describe Prog::Test::UpgradePostgresResource do
   describe "#finish" do
     it "exits if no failure happened" do
       project = Project[pgr_test.frame["postgres_test_project_id"]]
-      expect { pgr_test.finish }.to exit({"msg" => "Postgres upgrade tests are finished!"})
+      expect { pgr_test.finish }.to exit({"msg" => "Postgres tests are finished!"})
       expect(Project[project.id]).to be_nil
     end
 

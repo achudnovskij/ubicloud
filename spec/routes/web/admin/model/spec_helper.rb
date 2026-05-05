@@ -102,6 +102,11 @@ module AdminModelSpecHelper
       DiscountCode.create(code: "TEST123", credit_amount: 10, expires_at: Time.now + 86400)
     end
 
+    def create_resource_discount
+      project = Project.create(name: "test-project")
+      ResourceDiscount.create(project_id: project.id, discount_percent: 10, active_from: Time.utc(Time.now.year, Time.now.month))
+    end
+
     def create_dns_record
       project = Project.create(name: "test-project")
       zone = DnsZone.create(project_id: project.id, name: "test.com")
@@ -458,6 +463,12 @@ module AdminModelSpecHelper
       VictoriaMetricsServer.create(victoria_metrics_resource_id: vmr.id, vm_id: vm.id)
       pg = create_postgres_resource(project:, location_id: Location::HETZNER_FSN1_ID)
       PostgresMetricDestination.create_with_id(pg, url: "https://metrics.example.com", username: "test", password: "test-pass", postgres_resource_id: pg.id)
+    end
+
+    def create_postgres_log_destination
+      project = Project.create(name: "test-project")
+      pg = create_postgres_resource(project:, location_id: Location::HETZNER_FSN1_ID)
+      PostgresLogDestination.create(postgres_resource_id: pg.id, name: "test-dest", type: "syslog", url: "tcp://logs.example.com:6514")
     end
 
     def create_postgres_init_script
