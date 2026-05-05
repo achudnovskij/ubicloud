@@ -168,7 +168,10 @@ RSpec.describe Clover, "cli" do
       File.write(File.join(output_dir, "#{cmd.tr("/", "_")}.txt"), body)
     end
 
-    diff, = Open3.capture2e("diff", "-u", golden_file_dir, output_dir)
+    # Ignore pg_stat_ch.* GUCs in the CLI output diff. Their value embeds the
+    # server ubid and vm_host_id, which are non-deterministic in this fixture
+    # and not worth mocking — the GUC rendering is covered by the override spec.
+    diff, = Open3.capture2e("diff", "-u", "-I", '^pg_stat_ch\\.', golden_file_dir, output_dir)
     output_matches_golden_files = diff.empty?
 
     if diff.empty?
