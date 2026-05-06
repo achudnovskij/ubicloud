@@ -6,6 +6,7 @@ class Firewall < Sequel::Model
   many_to_one :project
   one_to_many :firewall_rules, order: :cidr, remover: nil, clearer: nil
   many_to_many :private_subnets
+  many_to_many :vms, read_only: true
   many_to_one :location
   plugin :association_dependencies, firewall_rules: :destroy
 
@@ -51,15 +52,24 @@ class Firewall < Sequel::Model
   end
 
   def associate_with_private_subnet(private_subnet, apply_firewalls: true)
-    add_private_subnet(private_subnet)
-    private_subnet.incr_update_firewall_rules if apply_firewalls
+    DB.transaction do
+      private_subnet.validate_firewall_attachment(self)
+      add_private_subnet(private_subnet)
+      private_subnet.apply_firewalls if apply_firewalls
+    end
+    nil
   end
 
   def disassociate_from_private_subnet(private_subnet, apply_firewalls: true)
     remove_private_subnet(private_subnet)
-    private_subnet.incr_update_firewall_rules if apply_firewalls
+    private_subnet.apply_firewalls if apply_firewalls
+    nil
   end
 
+  # Rule edits update firewall rules on attached subnets. Each
+  # provider's subnet nexus then propagates according to its model:
+  # metal/AWS fan out to VMs in the subnet, GCP forwards to the VPC
+  # which owns shared policy / tag-key / tag-value lifecycle.
   def update_private_subnet_firewall_rules
     private_subnets.each(&:incr_update_firewall_rules)
   end
