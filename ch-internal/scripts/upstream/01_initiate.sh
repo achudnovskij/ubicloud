@@ -41,6 +41,16 @@ git_retry() {
   done
 }
 
+# Apply pending DB migrations and regenerate schema/static caches + model
+# annotations, then stage any updates so they fold into the merge commit.
+# Migration filenames are unique across upstream and the fork, so this is safe
+# to run on every path including the conflict-markers-committed one.
+refresh_schema_caches() {
+  echo "Applying test DB migrations and refreshing schema caches..."
+  bundle exec rake test_up
+  git add -u cache/ model/ 2>/dev/null || true
+}
+
 git fetch upstream
 git fetch origin
 
@@ -102,6 +112,8 @@ if [ "$merge_ok" -eq 0 ]; then
         git_retry add -- "$f"
       done
 
+      refresh_schema_caches
+
       # core.hooksPath=/dev/null bypasses linters/formatters that would reject
       # malformed code (conflict markers don't parse). The PR will be opened as
       # draft so this commit is visibly broken to reviewers.
@@ -119,10 +131,12 @@ if [ "$merge_ok" -eq 0 ]; then
     fi
   else
     echo "All remaining conflicts were cache/* — auto-resolved. Finalizing merge commit..."
+    refresh_schema_caches
     git commit -F "$MERGE_MSG_FILE"
   fi
 else
   # Clean merge — finalize the commit ourselves since we used --no-commit.
+  refresh_schema_caches
   git commit -F "$MERGE_MSG_FILE"
 fi
 
