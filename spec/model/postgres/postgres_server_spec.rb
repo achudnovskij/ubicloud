@@ -1331,6 +1331,24 @@ RSpec.describe PostgresServer do
     end
   end
 
+  describe "#metrics_config" do
+    it "includes only chc_-prefixed tags as additional_labels with sanitized keys" do
+      resource.update(tags: [
+        {"key" => "chc_environment", "value" => "production"},
+        {"key" => "chc_team.name", "value" => "backend"},
+        {"key" => "chc_region-id", "value" => "us-west-2"},
+        {"key" => "owner", "value" => "should-be-filtered"},
+      ])
+
+      labels = postgres_server.metrics_config[:additional_labels]
+      expect(labels).to include("pg_tags_label_chc_environment" => "production")
+      expect(labels).to include("pg_tags_label_chc_team_name" => "backend")
+      expect(labels).to include("pg_tags_label_chc_region_id" => "us-west-2")
+      expect(labels.keys).not_to include("pg_tags_label_owner")
+      expect(labels.keys).not_to include(match(/-/))
+    end
+  end
+
   describe "#logs_config" do
     it "returns config with resource_id, instance, server_role, version, and empty destinations" do
       config = postgres_server.logs_config

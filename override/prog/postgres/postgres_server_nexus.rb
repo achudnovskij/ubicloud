@@ -16,8 +16,8 @@ class Prog::Postgres::PostgresServerNexus
     end
 
     def setup_otel
-      tag_attributes = postgres_server.resource.tags.map { |tag|
-        safe_key = tag["key"].gsub(/[^a-zA-Z0-9_-]/, "_")
+      tag_attributes = postgres_server.resource.tags.filter { |tag| tag["key"].start_with? "chc_" }.map { |tag|
+        safe_key = tag["key"].gsub(/[^a-zA-Z0-9_]/, "_")
         safe_value = tag["value"].gsub("'", "''")
 
         <<TAG_ATTR.chomp
