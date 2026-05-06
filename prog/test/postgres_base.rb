@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class Prog::Test::PostgresBase < Prog::Test::Base
-  def self.assemble(provider:, project_name:, local_e2e: false)
+  def self.assemble(provider:, project_name:, family: nil, aws_location_name: "us-west-2", local_e2e: false)
     postgres_test_project = if Config.local_e2e_postgres_test_project_id
       Project.with_pk!(Config.local_e2e_postgres_test_project_id)
     else
@@ -14,18 +14,31 @@ class Prog::Test::PostgresBase < Prog::Test::Base
     Strand.create(
       prog: name.delete_prefix("Prog::"),
       label: "start",
-      stack: [{"provider" => provider, "postgres_test_project_id" => postgres_test_project.id, "local_e2e" => local_e2e}],
+      stack: [{
+        "provider" => provider,
+        "family" => family,
+        "aws_location_name" => aws_location_name,
+        "postgres_test_project_id" => postgres_test_project.id,
+        "local_e2e" => local_e2e,
+      }],
     )
   end
 
-  def self.postgres_test_location_options(provider)
-    if provider == "aws"
-      location = Location[provider: "aws", project_id: Config.local_e2e_postgres_test_project_id, name: "us-west-2"]
+  def self.postgres_test_location_options(provider, family: nil, aws_location_name: "us-west-2")
+    case provider
+    when "aws"
+      location = Location[provider: "aws", project_id: Config.local_e2e_postgres_test_project_id, name: aws_location_name]
       location.location_credential_aws ||
         LocationCredentialAws.create_with_id(location, access_key: Config.e2e_aws_access_key, secret_key: Config.e2e_aws_secret_key)
       family = "m8gd"
       vcpus = 2
       [location.id, Option.aws_instance_type_name(family, vcpus), Option::AWS_STORAGE_SIZE_OPTIONS[family][vcpus].first.to_i]
+    when "gcp"
+      location = Location[provider: "gcp", project_id: nil]
+      Prog::Test::Base.ensure_gcp_e2e_credential(location)
+      family ||= "c4a-standard"
+      vcpus = Option::GCP_STORAGE_SIZE_OPTIONS[family].keys.first
+      [location.id, "#{family}-#{vcpus}", Option::GCP_STORAGE_SIZE_OPTIONS[family][vcpus].first.to_i]
     else
       [Location::HETZNER_FSN1_ID, "standard-2", 128]
     end
@@ -40,7 +53,11 @@ class Prog::Test::PostgresBase < Prog::Test::Base
   end
 
   def start(**)
-    location_id, target_vm_size, target_storage_size_gib = self.class.postgres_test_location_options(frame["provider"])
+    location_id, target_vm_size, target_storage_size_gib = self.class.postgres_test_location_options(
+      frame["provider"],
+      family: frame["family"],
+      aws_location_name: frame["aws_location_name"] || "us-west-2",
+    )
 
     st = Prog::Postgres::PostgresResourceNexus.assemble(
       project_id: frame["postgres_test_project_id"],
@@ -50,7 +67,11 @@ class Prog::Test::PostgresBase < Prog::Test::Base
       **,
     )
 
-    frame = {"postgres_resource_id" => st.id, "private_subnet_id" => st.subject.private_subnet_id}
+    frame = {
+      "postgres_resource_id" => st.id,
+      "private_subnet_id" => st.subject.private_subnet_id,
+      "location_id" => location_id,
+    }
     yield st.subject, frame if block_given?
     update_stack(frame)
     hop_wait_postgres_resource
@@ -77,10 +98,25 @@ class Prog::Test::PostgresBase < Prog::Test::Base
   end
 
   def nap_if_private_subnet
-    if PrivateSubnet[frame["private_subnet_id"]]
+    if PrivateSubnet[project_id: frame["postgres_test_project_id"]]
       Clog.emit("Waiting for private subnet to be destroyed")
       nap 5
     end
+  end
+
+  def nap_if_gcp_vpc
+    if GcpVpc[project_id: frame["postgres_test_project_id"]]
+      Clog.emit("Waiting for GCP VPC to be destroyed")
+      nap 5
+    end
+  end
+
+  def verify_timelines_destroyed(timeline_ids)
+    remaining = PostgresTimeline.where(id: timeline_ids).select_map(:id)
+    return if remaining.empty?
+    Semaphore.incr(remaining, "destroy")
+    Clog.emit("Verifying timelines are retained after resource destroy (found #{remaining.count})")
+    nap 5
   end
 
   def finish
@@ -110,5 +146,22 @@ class Prog::Test::PostgresBase < Prog::Test::Base
     end
 
     hop_destroy_postgres
+  end
+
+  # Rule edits fan out differently per provider. On GCP, Firewall bumps
+  # update_firewall_rules on the subnet; SubnetNexus#wait then forwards
+  # to the GcpVpc, whose VpcNexus runs the shared policy sync. On
+  # metal/AWS, the subnet fans the semaphore out to its VMs. Wait for
+  # the target chain to drain end-to-end: on GCP both subnet and VPC
+  # must be back in `wait` with no pending semaphore, since the subnet
+  # holds the semaphore until SubnetNexus wakes and forwards it.
+  def wait_firewall_rules_applied
+    ps = postgres_resource.private_subnet
+    if (vpc = ps.gcp_vpc)
+      nap 5 if ps.update_firewall_rules_set? || ps.strand.label != "wait" ||
+        vpc.update_firewall_rules_set? || vpc.strand.label != "wait"
+    elsif ps.update_firewall_rules_set? || ps.vms.any?(&:update_firewall_rules_set?)
+      nap 5
+    end
   end
 end

@@ -3,6 +3,7 @@ run-name: E2E ${{ github.event_name }} ${{ inputs.providers }}
 
 permissions:
   contents: read
+  pull-requests: write
 
 on:
   workflow_dispatch:
@@ -10,12 +11,12 @@ on:
       test_cases:
         description: 'Comma-separated list of test cases (vm)'
         required: true
-        default: 'vm,github_runner_ubuntu_2404,github_runner_ubuntu_2204,postgres_standard,postgres_ha,postgres_upgrade,kubernetes'
+        default: 'vm,github_runner_ubuntu_2404,github_runner_ubuntu_2204,postgres_standard,postgres_ha,postgres_upgrade,postgres_firewall,kubernetes'
         type: string
       providers:
         description: 'Comma-separated list of providers (metal,aws)'
         required: true
-        default: 'metal,aws'
+        default: 'metal,aws,gcp'
         type: string
 
   schedule:
@@ -32,7 +33,7 @@ jobs:
       - name: Set provider matrix
         id: set-providers
         run: |
-          providers="metal,aws"
+          providers="metal,aws,gcp"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.providers }}" ]]; then
             providers="${{ inputs.providers }}"
           fi
@@ -54,7 +55,7 @@ jobs:
     runs-on: ubicloud-standard-4
     environment: E2E-${{ matrix.provider }}
     timeout-minutes: 93
-    concurrency: ${{ (matrix.provider == 'metal' && 'E2E-metal') || (needs.setup.outputs.has_github_runner == 'true' && 'E2E-aws') || format('E2E-aws-{0}', github.run_id) }}
+    concurrency: ${{ (matrix.provider == 'metal' && 'E2E-metal') || (matrix.provider == 'gcp' && format('E2E-gcp-{0}', github.run_id)) || (needs.setup.outputs.has_github_runner == 'true' && 'E2E-aws') || format('E2E-aws-{0}', github.run_id) }}
 
     steps:
     - name: Check out code
@@ -63,8 +64,7 @@ jobs:
     - name: Setup SSH access
       uses: ubicloud/ssh-runner@v2
       with:
-        public-ssh-key: |
-          ${{ secrets.OPERATOR_SSH_PUBLIC_KEYS }}
+        public-ssh-key: ${{ secrets.OPERATOR_SSH_PUBLIC_KEYS }}
         wait-minutes: 0
 
     - name: Set up Clover
@@ -127,10 +127,12 @@ jobs:
         BASE_URL: https://${{ secrets.CLOUDFLARED_ADDRESS }}
         ALLOW_UNSPREAD_SERVERS: "true"
         DISPATCHER_MAX_THREADS: 16
+        PROVIDER_RESOURCE_TAG_VALUE: ${{ github.run_id }}
         E2E_HETZNER_SERVER_ID: ${{ secrets.E2E_HETZNER_SERVER_ID }}
         E2E_GITHUB_INSTALLATION_ID: ${{ secrets.E2E_GH_INSTALLATION_ID }}
         E2E_AWS_ACCESS_KEY: ${{ secrets.E2E_AWS_ACCESS_KEY }}
         E2E_AWS_SECRET_KEY: ${{ secrets.E2E_AWS_SECRET_KEY }}
+        E2E_GCP_CREDENTIALS_BASE64_JSON: ${{ secrets.E2E_GCP_CREDENTIALS_BASE64_JSON }}
         E2E_CACHE_PROXY_DOWNLOAD_URL: ${{ secrets.E2E_CACHE_PROXY_DOWNLOAD_URL }}
         HETZNER_SSH_PUBLIC_KEY: ${{ secrets.HETZNER_SSH_PUBLIC_KEY }}
         HETZNER_SSH_PRIVATE_KEY: ${{ secrets.HETZNER_SSH_PRIVATE_KEY }}
@@ -384,3 +386,10 @@ jobs:
             aws ec2 delete-vpc --vpc-id $vpc_id --region $region || true
           done
         done
+
+    - name: Cleanup GCP resources
+      if: always() && matrix.provider == 'gcp'
+      uses: ./.github/actions/gcp-cleanup-e2e
+      with:
+        credentials-base64: ${{ secrets.E2E_GCP_CREDENTIALS_BASE64_JSON }}
+        tag-value: ${{ github.run_id }}

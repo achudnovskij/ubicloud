@@ -226,5 +226,15 @@ class Vm < Sequel::Model
     def metal_update_firewall_rules_prog
       Prog::Vnet::Metal::UpdateFirewallRules
     end
+
+    def metal_validate_firewall_cap(firewall)
+      # metal has no firewall count cap
+      nil
+    end
+
+    def metal_validate_subnet_firewall_cap(subnet)
+      # metal has no firewall count cap
+      nil
+    end
   end
 end

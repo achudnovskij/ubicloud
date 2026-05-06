@@ -15,8 +15,8 @@ RSpec.describe Location do
   it ".for_project filters dataset to given project and non-project-specific locations" do
     p1_loc
     p2_loc
-    expect(described_class.for_project(p1_id).select_order_map(:name)).to eq ["github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l1", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2"]
-    expect(described_class.for_project(p2_id).select_order_map(:name)).to eq ["github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l2", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2"]
+    expect(described_class.for_project(p1_id).select_order_map(:name)).to eq ["gcp-us-central1", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l1", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2"]
+    expect(described_class.for_project(p2_id).select_order_map(:name)).to eq ["gcp-us-central1", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l2", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2"]
   end
 
   it ".visible_or_for_project filters dataset to given project and visible non-project-specific locations" do
@@ -45,10 +45,65 @@ RSpec.describe Location do
     expect(p2_loc.provider_dispatcher_group_name).to eq("metal")
   end
 
+  describe ".postgres_locations" do
+    it "without arg returns metal and AWS public locations but no GCP" do
+      names = described_class.postgres_locations.map(&:name)
+
+      expect(names).to include("hetzner-fsn1", "leaseweb-wdc02")
+      expect(names).to include("us-east-1", "us-west-2")
+      expect(names).not_to include("gcp-us-central1")
+      expect(names).not_to include("github-runners")
+    end
+
+    it "excludes a visible: true GCP public location when arg is nil (no visible bypass for GCP)" do
+      described_class[name: "gcp-us-central1"].update(visible: true)
+      names = described_class.postgres_locations.map(&:name)
+      expect(names).not_to include("gcp-us-central1")
+    end
+
+    it "with empty array arg behaves like nil (still no GCP)" do
+      names = described_class.postgres_locations([]).map(&:name)
+      expect(names).to include("hetzner-fsn1", "leaseweb-wdc02", "us-east-1", "us-west-2")
+      expect(names).not_to include("gcp-us-central1")
+    end
+
+    it "with array containing a GCP region name includes that GCP region" do
+      names = described_class.postgres_locations(["gcp-us-central1"]).map(&:name)
+      expect(names).to include("gcp-us-central1")
+      expect(names).to include("hetzner-fsn1", "leaseweb-wdc02", "us-east-1", "us-west-2")
+    end
+
+    it "excludes BYOC GCP locations even when their name is in the array" do
+      described_class.create(name: "my-gcp", display_name: "my-gcp", ui_name: "my-gcp", visible: true, provider: "gcp", project_id: p1_id)
+      names = described_class.postgres_locations(["my-gcp"]).map(&:name)
+      expect(names).not_to include("my-gcp")
+    end
+
+    it "excludes BYOC AWS locations" do
+      described_class.create(name: "my-aws", display_name: "my-aws", ui_name: "my-aws", visible: true, provider: "aws", project_id: p1_id)
+      names = described_class.postgres_locations.map(&:name)
+      expect(names).not_to include("my-aws")
+    end
+
+    it "includes AWS public locations regardless of array (bypass preserved)" do
+      expect(described_class[name: "us-east-1"].visible).to be(false)
+      names_nil = described_class.postgres_locations.map(&:name)
+      names_empty = described_class.postgres_locations([]).map(&:name)
+      names_with_gcp = described_class.postgres_locations(["gcp-us-central1"]).map(&:name)
+      expect([names_nil, names_empty, names_with_gcp]).to all(include("us-east-1", "us-west-2"))
+    end
+  end
+
   it "#azs raises if not aws location" do
     p1_loc.update(provider: "hetzner")
     expect { p1_loc.azs }.to raise_error("azs is only valid for aws locations")
     expect(LocationAz.count).to eq(0)
+  end
+
+  it "#azs returns cached gcp azs" do
+    gcp_loc = described_class.create(name: "gcp-azs-test", display_name: "gcp-azs-test", ui_name: "gcp-azs-test", visible: false, provider: "gcp")
+    gcp_loc.add_location_az(az: "a")
+    expect(gcp_loc.azs.map(&:az)).to eq(["a"])
   end
 
   it "returns the aws azs for an aws location" do
@@ -65,7 +120,23 @@ RSpec.describe Location do
 
   it "raises descriptive error when AMI not found" do
     expect {
-      p2_loc.pg_ami("16", "x64")
+      p2_loc.pg_aws_ami("16", "x64")
     }.to raise_error("No AMI found for PostgreSQL 16 (x64) in l2")
+  end
+
+  it "#pg_gce_image returns image path using configured hosting project" do
+    PgGceImage.dataset.destroy
+    expect(Config).to receive(:postgres_gce_image_gcp_project_id).and_return("image-hosting-project")
+    gcp_loc = described_class.create(name: "gcp-image-test", display_name: "gcp-image-test", ui_name: "gcp-image-test", visible: false, provider: "gcp")
+    PgGceImage.create(gce_image_name: "postgres-ubuntu-2204-x64-20260218", arch: "x64", pg_versions: ["16", "17", "18"])
+    expect(gcp_loc.pg_gce_image("x64", "17")).to eq("projects/image-hosting-project/global/images/postgres-ubuntu-2204-x64-20260218")
+  end
+
+  it "#pg_gce_image raises when no image found" do
+    PgGceImage.dataset.destroy
+    gcp_loc = described_class.create(name: "gcp-image-err", display_name: "gcp-image-err", ui_name: "gcp-image-err", visible: false, provider: "gcp")
+    expect {
+      gcp_loc.pg_gce_image("x64", "17")
+    }.to raise_error("No GCE image found for arch x64 and pg_version 17")
   end
 end
