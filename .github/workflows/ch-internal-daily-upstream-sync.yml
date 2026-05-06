@@ -1,0 +1,69 @@
+name: ch-internal-daily-upstream-sync
+
+# Daily orchestrator that runs ch-internal/scripts/upstream/daily.sh:
+# fetches upstream, opens a sync PR if there's anything to merge, dispatches
+# CI/E2E on clean merges, decorates conflict PRs with a label, tags the merge
+# commit for next-day takeover detection, and prunes >14-day-old sync branches
+# whose PR is closed.
+
+on:
+  # Schedule is intentionally disabled during initial rollout. Re-enable once
+  # the first manual run lands a clean PR end-to-end (CI/E2E green, takeover
+  # detection working on the next-day's run).
+  # schedule:
+  #   # 06:00 PDT / 05:00 PST, Mon-Fri (GitHub cron is UTC, no DST)
+  #   - cron: '0 13 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write        # push sync branch + sync-bot/* tag, delete stale branches
+  pull-requests: write   # open / edit / comment / close / label PRs
+  actions: write         # gh workflow run for ch-internal-ubimirror-ci.yml + ch-internal-pg-ubicloud-ci-e2e.yml
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  daily-sync:
+    runs-on: k8s-large
+    timeout-minutes: 30
+    steps:
+      # PRs opened with the default GITHUB_TOKEN do not trigger downstream
+      # workflows. Use a GitHub App token so CI / E2E fire on the bot's PRs.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.WORKFLOW_AUTH_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_AUTH_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ubicloud
+
+      - name: Checkout clickhouse
+        uses: actions/checkout@v6
+        with:
+          ref: clickhouse
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name 'upstream-sync-bot'
+          git config user.email 'upstream-sync-bot@users.noreply.github.com'
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/ubicloud/ubicloud.git
+          git fetch upstream
+
+      # Provides PostgreSQL 17, Ruby per .tool-versions, bundle install, and
+      # the `clover` DB role. Required by 01_initiate.sh's refresh_schema_caches
+      # helper (`bundle exec rake test_up`).
+      - name: Setup Clover (Postgres + Ruby + bundle)
+        uses: ./.github/actions/setup-clover
+
+      - name: Run daily upstream sync
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: ch-internal/scripts/upstream/daily.sh
