@@ -128,6 +128,8 @@ paths:
     $ref: ./openapi-clickgres.yml#/paths/~1project~1{project_id}~1clickgres-billing~1postgres-details
   /project/{project_id}/clickgres-billing/postgres-resources:
     $ref: ./openapi-clickgres.yml#/paths/~1project~1{project_id}~1clickgres-billing~1postgres-resources
+  /project/{project_id}/clickgres-testing/{pg_name_or_id}/inject-failure:
+    $ref: ./openapi-clickgres.yml#/paths/~1project~1{project_id}~1clickgres-testing~1{pg_name_or_id}~1inject-failure
   /project/{project_id}/firewall:
     parameters:
       - $ref: '#/components/parameters/project_id'
@@ -4723,6 +4725,8 @@ components:
 tags:
   - description: Clickgres Billing Operations
     name: Clickgres Billing
+  - description: Clickgres Testing Operations
+    name: Clickgres Testing
   - description: Firewall Operations
     name: Firewall
   - description: Firewall Rule Operations

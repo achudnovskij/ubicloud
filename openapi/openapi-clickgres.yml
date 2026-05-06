@@ -146,6 +146,46 @@ paths:
                   - error
       tags:
         - Clickgres Billing
+  /project/{project_id}/clickgres-testing/{pg_name_or_id}/inject-failure:
+    parameters:
+      - $ref: './openapi.yml#/components/parameters/project_id'
+      - name: pg_name_or_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Name or UBID of the Postgres resource
+    post:
+      operationId: postClickgresTestingInjectFailure
+      summary: Inject a failure into a running Postgres resource for testing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - failure_type
+              properties:
+                failure_type:
+                  type: string
+                  enum:
+                    - os_shutdown
+                    - pg_restart
+                    - pg_service_stop
+                  description: >
+                    Type of failure to inject.
+                    os_shutdown: graceful OS shutdown.
+                    pg_restart: restart the Postgres process only.
+                    pg_service_stop: stop the Postgres service (smart shutdown).
+      responses:
+        '204':
+          description: Failure injected. Resource state will reflect the failure asynchronously.
+        default:
+          $ref: './openapi.yml#/components/responses/Error'
+      tags:
+        - Clickgres Testing
 components:
   responses:
     ClickgresBillingPostgresResources:
@@ -205,5 +245,7 @@ components:
 tags:
   - description: Clickgres Billing Operations
     name: Clickgres Billing
+  - description: Clickgres Testing Operations
+    name: Clickgres Testing
 security:
   - BearerAuth: []
