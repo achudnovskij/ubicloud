@@ -90,21 +90,31 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
       postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
 
       postgres_server.resource.update(tags: [
-        {"key" => "environment", "value" => "production"},
-        {"key" => "team", "value" => "backend"},
+        {"key" => "chc_environment", "value" => "production"},
+        {"key" => "chc_team.name", "value" => "backend"},
+        {"key" => "chc_region-id", "value" => "us-west-2"},
+        {"key" => "owner", "value" => "should-be-filtered"},
       ])
 
       expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol") do |_, content, _|
-        expect(content).to include("ubi.postgres_resource_tags_label_environment")
+        expect(content).to include("ubi.postgres_resource_tags_label_chc_environment")
         expect(content).to include("value: 'production'")
-        expect(content).to include("ubi.postgres_resource_tags_label_team")
+        expect(content).to include("ubi.postgres_resource_tags_label_chc_team_name")
         expect(content).to include("value: 'backend'")
+        expect(content).to include("ubi.postgres_resource_tags_label_chc_region_id")
+        expect(content).to include("value: 'us-west-2'")
+        expect(content).not_to include("ubi.postgres_resource_tags_label_chc_team.name")
+        expect(content).not_to include("ubi.postgres_resource_tags_label_chc_region-id")
+        expect(content).not_to include("ubi.postgres_resource_tags_label_owner")
+        expect(content).not_to include("should-be-filtered")
 
         parsed = YAML.safe_load(content)
         attrs = parsed.dig("processors", "resource/ubiMetadata", "attributes")
         tag_keys = attrs.map { |a| a["key"] }
-        expect(tag_keys).to include("ubi.postgres_resource_tags_label_environment")
-        expect(tag_keys).to include("ubi.postgres_resource_tags_label_team")
+        expect(tag_keys).to include("ubi.postgres_resource_tags_label_chc_environment")
+        expect(tag_keys).to include("ubi.postgres_resource_tags_label_chc_team_name")
+        expect(tag_keys).to include("ubi.postgres_resource_tags_label_chc_region_id")
+        expect(tag_keys).not_to include("ubi.postgres_resource_tags_label_owner")
       end
 
       nx.setup_otel
