@@ -186,6 +186,56 @@ paths:
           $ref: './openapi.yml#/components/responses/Error'
       tags:
         - Clickgres Testing
+  /project/{project_id}/clickgres-testing/{pg_name_or_id}/convergence:
+    parameters:
+      - $ref: './openapi.yml#/components/parameters/project_id'
+      - name: pg_name_or_id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Name or UBID of the Postgres resource
+    get:
+      operationId: getClickgresTestingConvergence
+      summary: Report whether a Postgres resource has fully converged to its target state
+      responses:
+        '200':
+          description: Convergence status of the resource
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required:
+                  - converged
+                  - reasons
+                  - pending_semaphores
+                properties:
+                  converged:
+                    type: boolean
+                    description: True when the resource has reached and is sitting at its target state.
+                  reasons:
+                    type: array
+                    description: Empty when converged=true; otherwise lists which checks failed.
+                    items:
+                      type: string
+                      enum:
+                        - needs_convergence
+                        - servers_not_ready
+                        - ongoing_failover
+                        - pending_semaphores
+                  pending_semaphores:
+                    type: array
+                    description: >
+                      Names of semaphores currently set on the resource or any of its
+                      server strands (excluding the periodic `checkup` semaphore set by
+                      the monitor). Populated when reasons includes pending_semaphores.
+                    items:
+                      type: string
+        default:
+          $ref: './openapi.yml#/components/responses/Error'
+      tags:
+        - Clickgres Testing
 components:
   responses:
     ClickgresBillingPostgresResources:

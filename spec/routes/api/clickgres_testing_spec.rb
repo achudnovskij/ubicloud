@@ -46,6 +46,11 @@ RSpec.describe Clover, "clickgres-testing" do
     "/project/#{project.ubid}/clickgres-testing/#{name_or_id}/inject-failure"
   end
 
+  def convergence_path(pg_or_name)
+    name_or_id = pg_or_name.is_a?(String) ? pg_or_name : pg_or_name.name
+    "/project/#{project.ubid}/clickgres-testing/#{name_or_id}/convergence"
+  end
+
   describe "POST /project/:project_id/clickgres-testing/:pg_name_or_id/inject-failure" do
     it "returns 403 when failure injection is disabled" do
       ENV.delete("ENABLE_FAILURE_INJECTION")
@@ -140,6 +145,92 @@ RSpec.describe Clover, "clickgres-testing" do
       expect(last_response.status).to eq(400)
       expect(JSON.parse(last_response.body).dig("error", "message"))
         .to eq("No representative server found for this database")
+    end
+  end
+
+  describe "GET /project/:project_id/clickgres-testing/:pg_name_or_id/convergence" do
+    it "is reachable even when failure injection is disabled" do
+      ENV.delete("ENABLE_FAILURE_INJECTION")
+      pg = create_pg("test-pg-conv-no-gate")
+      get convergence_path(pg)
+      expect(last_response.status).to eq(200)
+    end
+
+    it "returns 404 for nonexistent postgres resource" do
+      get convergence_path("nonexistent")
+      expect(last_response.status).to eq(404)
+    end
+
+    it "reports not converged for a freshly assembled resource" do
+      pg = create_pg("test-pg-conv-fresh")
+      get convergence_path(pg)
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["converged"]).to be(false)
+      # A freshly assembled resource hasn't reached `wait` on its servers yet,
+      # so at minimum servers_not_ready should be reported.
+      expect(body["reasons"]).to include("servers_not_ready")
+    end
+
+    it "reports converged when all checks pass" do
+      pg = create_pg("test-pg-conv-ok")
+      # Drive real state instead of stubs (allow_any_instance_of doesn't work
+      # in frozen mode): move all strands to `wait` and clear assemble-time
+      # semaphores like initial_provisioning.
+      strand_ids = pg.servers.map(&:id) + [pg.id]
+      DB[:strand].where(id: strand_ids).update(label: "wait")
+      DB[:semaphore].where(strand_id: strand_ids).delete
+
+      get convergence_path(pg)
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body).to eq("converged" => true, "reasons" => [], "pending_semaphores" => [])
+    end
+
+    it "lists each failed check in reasons" do
+      pg = create_pg("test-pg-conv-failing")
+      # Leave strands at their initial (non-wait) labels → servers_not_ready.
+      # incr_recycle_unavailable_server → needs_recycling? → needs_convergence?
+      # incr_unplanned_take_over → taking_over? → ongoing_failover?
+      # Both also count as pending semaphores.
+      server = pg.representative_server
+      server.incr_recycle_unavailable_server
+      server.incr_unplanned_take_over
+
+      get convergence_path(pg)
+      body = JSON.parse(last_response.body)
+      expect(body["converged"]).to be(false)
+      expect(body["reasons"]).to include("needs_convergence", "servers_not_ready", "ongoing_failover", "pending_semaphores")
+    end
+
+    it "reports pending_semaphores excluding checkup" do
+      pg = create_pg("test-pg-conv-sems")
+      strand_ids = pg.servers.map(&:id) + [pg.id]
+      DB[:strand].where(id: strand_ids).update(label: "wait")
+      DB[:semaphore].where(strand_id: strand_ids).delete
+
+      server = pg.representative_server
+      server.incr_restart
+      server.incr_checkup
+
+      get convergence_path(pg)
+      body = JSON.parse(last_response.body)
+      expect(body["converged"]).to be(false)
+      expect(body["reasons"]).to eq(["pending_semaphores"])
+      expect(body["pending_semaphores"]).to eq(["restart"])
+    end
+
+    it "looks up postgres resource by UBID" do
+      pg = create_pg("test-pg-conv-ubid")
+      get "/project/#{project.ubid}/clickgres-testing/#{pg.ubid}/convergence"
+      expect(last_response.status).to eq(200)
+    end
+
+    it "does not write an audit_log row" do
+      pg = create_pg("test-pg-conv-audit")
+      expect { get convergence_path(pg) }
+        .not_to change { DB[:audit_log].where(Sequel.lit("? = ANY(object_ids)", pg.id)).count }
+      expect(last_response.status).to eq(200)
     end
   end
 end

@@ -149,25 +149,76 @@ jobs:
           api_host: ${{ steps.app_ip.outputs.ip }}
           timeout: "10"
 
-      - name: E2E availability replicas (PG17)
-        uses: ./.github/actions/run-stresshouse-test
-        with:
-          name: E2E avail replicas PG17
-          entrypoint: /app/pg_ubi_avail_replicas
-          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237,"pg_version":"17"}'
-          image: ${{ env.STRESSHOUSE_IMAGE }}
-          network: devcontainer_ubicloud
-          api_host: ${{ steps.app_ip.outputs.ip }}
+      - name: Run E2E tests in parallel
+        env:
+          PAT_TOKEN: ${{ steps.prepare.outputs.pat_token }}
+          PROJECT_UBID: ${{ steps.prepare.outputs.project_ubid }}
+          IMAGE: ${{ env.STRESSHOUSE_IMAGE }}
+          NETWORK: devcontainer_ubicloud
+          API_HOST: ${{ steps.app_ip.outputs.ip }}
+          LOG_DIR: /tmp/ci-logs
+        run: |
+          set -u
+          BASE='"api_base_url":"http://api.localhost:3100","api_token":"'"$PAT_TOKEN"'","project_id":"'"$PROJECT_UBID"'","location":"aws-us-west-2"'
 
-      - name: E2E availability replicas (PG18)
-        uses: ./.github/actions/run-stresshouse-test
-        with:
-          name: E2E avail replicas PG18
-          entrypoint: /app/pg_ubi_avail_replicas
-          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237,"pg_version":"18"}'
-          image: ${{ env.STRESSHOUSE_IMAGE }}
-          network: devcontainer_ubicloud
-          api_host: ${{ steps.app_ip.outputs.ip }}
+          NAMES=()
+          PIDS=()
+
+          # Backgrounds the script in the *parent* shell (no subshell), so $!
+          # is captured directly and `wait "$pid"` works in the parent.
+          launch() {
+            local name="$1" entrypoint="$2" config="$3" timeout_min="${4:-20}"
+            TEST_NAME="$name" \
+            ENTRYPOINT="$entrypoint" \
+            PLUGIN_CONFIG="$config" \
+            IMAGE="$IMAGE" \
+            NETWORK="$NETWORK" \
+            API_HOST="$API_HOST" \
+            LOG_DIR="$LOG_DIR" \
+            TIMEOUT_MIN="$timeout_min" \
+              ./.devcontainer/scripts/run-stresshouse-test.sh &
+            NAMES+=("$name")
+            PIDS+=("$!")
+            echo "Launched $name (pid=$!)"
+          }
+
+          launch "E2E avail replicas PG17" /app/pg_ubi_avail_replicas \
+            "{$BASE,\"server_size\":\"m8gd.large\",\"target_size\":\"m8gd.xlarge\",\"storage_size\":118,\"target_storage_size\":237,\"pg_version\":\"17\"}"
+
+          launch "E2E avail replicas PG18" /app/pg_ubi_avail_replicas \
+            "{$BASE,\"server_size\":\"m8gd.large\",\"target_size\":\"m8gd.xlarge\",\"storage_size\":118,\"target_storage_size\":237,\"pg_version\":\"18\"}"
+
+          launch "E2E async HA PG18" /app/pg_ubi_async_ha \
+            "{$BASE,\"server_size\":\"m8gd.large\",\"storage_size\":118,\"pg_version\":\"18\"}"
+
+          EXIT_CODES=()
+          for pid in "${PIDS[@]}"; do
+            wait "$pid"
+            EXIT_CODES+=("$?")
+          done
+
+          OVERALL=0
+          echo ""
+          echo "=== Test results ==="
+          for i in "${!NAMES[@]}"; do
+            name="${NAMES[$i]}"
+            code="${EXIT_CODES[$i]}"
+            log_name=$(echo "$name" | tr ' A-Z' '-a-z' | tr -cs 'a-z0-9-' '-')
+            if [ "$code" -eq 0 ]; then
+              echo "PASS: $name"
+            else
+              echo "FAIL: $name (exit $code)"
+              OVERALL=1
+            fi
+            echo "::group::$name output"
+            for f in "$LOG_DIR/${log_name}.log" "$LOG_DIR/${log_name}-retry"*.log; do
+              [ -f "$f" ] || continue
+              echo "--- $f ---"
+              cat "$f"
+            done
+            echo "::endgroup::"
+          done
+          exit $OVERALL
 
       - name: Collect debug info
         if: always()
