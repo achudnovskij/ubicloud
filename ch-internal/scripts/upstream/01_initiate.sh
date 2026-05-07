@@ -47,6 +47,9 @@ git_retry() {
 # to run on every path including the conflict-markers-committed one.
 refresh_schema_caches() {
   echo "Applying test DB migrations and refreshing schema caches..."
+  # Re-resolve gems: the upstream merge may have bumped Gemfile.lock to
+  # reference versions that the pre-merge `bundle install` didn't fetch.
+  bundle install
   bundle exec rake test_up
   git add -u cache/ model/ 2>/dev/null || true
 }
