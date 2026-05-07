@@ -1,0 +1,185 @@
+name: ch-internal-pg-ubicloud-e2e-gate
+
+# Posts the `require-pg-e2e` commit status on every PR against clickhouse.
+#   - non-upstream-sync PR  -> success immediately (gate is a no-op)
+#   - upstream-sync PR      -> mirrors the latest pg-ubicloud-ci E2E run for
+#                              the head SHA (pending / success / failure)
+#
+# Also auto-dispatches the pg-ubicloud-ci E2E workflow when conflict markers
+# are cleared from the head and no E2E run yet exists for that SHA.
+#
+# Maintains one sticky comment per sync PR with checklist-style status.
+# Identified by the HTML marker <!-- pg-e2e-gate -->; edited in place across
+# runs to avoid comment noise.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_run:
+    workflows: ["pg-ubicloud-ci E2E"]
+    types: [completed]
+
+permissions:
+  contents: read
+  statuses: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.WORKFLOW_AUTH_APP_ID }}
+          private-key: ${{ secrets.WORKFLOW_AUTH_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ubicloud
+
+      - name: Resolve PR + label
+        id: resolve
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const headSha = context.eventName === 'pull_request'
+              ? context.payload.pull_request.head.sha
+              : context.payload.workflow_run.head_sha;
+
+            const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner, repo: context.repo.repo, commit_sha: headSha,
+            });
+            const pr = prs.find(p => p.state === 'open' && p.base.ref === 'clickhouse');
+            if (!pr) { core.info(`No open PR for ${headSha}; skipping`); return; }
+
+            // A PR is treated as an upstream-sync PR if EITHER the bot's
+            // label is applied OR the head branch follows the sync/upstream-*
+            // naming convention. Belt-and-suspenders against accidental
+            // label removal or labelless manual flows.
+            const labels = pr.labels.map(l => l.name);
+            const isSyncPr = labels.includes('upstream-sync-auto')
+                          || pr.head.ref.startsWith('sync/upstream-');
+            core.setOutput('pr_number', pr.number);
+            core.setOutput('head_sha', headSha);
+            core.setOutput('head_ref', pr.head.ref);
+            core.setOutput('is_sync_pr', isSyncPr.toString());
+
+      - name: Auto-pass non-sync PRs
+        if: steps.resolve.outputs.pr_number && steps.resolve.outputs.is_sync_pr == 'false'
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner, repo: context.repo.repo,
+              sha: '${{ steps.resolve.outputs.head_sha }}',
+              state: 'success',
+              context: 'require-pg-e2e',
+              description: 'Not an upstream-sync PR — gate auto-passes.',
+            });
+
+      - name: Checkout PR head (for marker scan)
+        if: steps.resolve.outputs.is_sync_pr == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.head_sha }}
+          fetch-depth: 1
+
+      - name: Evaluate gate, dispatch E2E if ready, update sticky comment
+        if: steps.resolve.outputs.is_sync_pr == 'true'
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+          HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { execSync } = require('child_process');
+            const prNumber = Number(process.env.PR_NUMBER);
+            const headSha = process.env.HEAD_SHA;
+            const headRef = process.env.HEAD_REF;
+
+            // 1. Conflict marker scan on head tree
+            let hasConflicts = false;
+            try {
+              execSync("git grep -l '^<<<<<<< ' HEAD", { stdio: 'pipe' });
+              hasConflicts = true;
+            } catch (_) { /* exit 1 = no matches */ }
+
+            // 2. Latest pg-ubicloud E2E run for this head SHA
+            const { data: runs } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner, repo: context.repo.repo,
+              workflow_id: 'ch-internal-pg-ubicloud-ci-e2e.yml',
+              head_sha: headSha,
+            });
+            const latest = runs.workflow_runs[0];
+            const e2eDone = latest?.status === 'completed';
+            const e2ePassed = latest?.conclusion === 'success';
+            const e2eUrl = latest?.html_url;
+
+            // 3. Auto-dispatch when conflicts cleared and no run yet
+            if (!hasConflicts && !latest) {
+              core.info(`Dispatching pg-ubicloud-ci E2E on ${headRef}`);
+              await github.rest.actions.createWorkflowDispatch({
+                owner: context.repo.owner, repo: context.repo.repo,
+                workflow_id: 'ch-internal-pg-ubicloud-ci-e2e.yml',
+                ref: headRef,
+              });
+            }
+
+            // 4. Commit status
+            let state, description;
+            if (hasConflicts) {
+              state = 'pending';
+              description = 'Resolve conflicts; E2E auto-runs on push.';
+            } else if (e2ePassed) {
+              state = 'success';
+              description = 'pg-ubicloud-ci E2E succeeded.';
+            } else if (e2eDone) {
+              state = 'failure';
+              description = `pg-ubicloud-ci E2E ${latest.conclusion}.`;
+            } else {
+              state = 'pending';
+              description = latest ? 'pg-ubicloud-ci E2E running...' : 'Waiting for pg-ubicloud-ci E2E to start.';
+            }
+            const fallbackUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/workflows/ch-internal-pg-ubicloud-ci-e2e.yml`;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner, repo: context.repo.repo,
+              sha: headSha,
+              state, description,
+              context: 'require-pg-e2e',
+              target_url: e2eUrl || fallbackUrl,
+            });
+
+            // 5. Sticky comment (one per PR, edited in place)
+            const conflictBox = hasConflicts ? ' ' : 'x';
+            const e2eBox = e2ePassed ? 'x' : ' ';
+            const e2eLine = e2eUrl
+              ? `pg-ubicloud-ci E2E green ([run](${e2eUrl}))`
+              : 'pg-ubicloud-ci E2E green';
+            const body = [
+              '<!-- pg-e2e-gate -->',
+              '## Pre-merge checks',
+              '',
+              `- [${conflictBox}] Conflicts resolved`,
+              `- [${e2eBox}] ${e2eLine}`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: prNumber,
+            });
+            const existing = comments.find(c => c.body?.includes('<!-- pg-e2e-gate -->'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: prNumber, body,
+              });
+            }

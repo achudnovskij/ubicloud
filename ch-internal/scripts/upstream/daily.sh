@@ -18,15 +18,8 @@ ORIGIN_REPO=$(echo "$ORIGIN_URL" | sed -E 's#^(https://github\.com/|git@github\.
 echo "Origin repo: $ORIGIN_REPO"
 
 # ----- 1. Look for existing open sync PR and decide skip / supersede ---------
-#
-# Takeover signals (any one wins → skip today):
-#   - assignee is set
-#   - PR is no longer draft (someone marked it ready)
-#   - PR head SHA differs from the bot's `sync-bot/<branch>` tag SHA
-#     (someone pushed commits on top of the bot's merge)
-
 EXISTING=$(gh pr list --repo "$ORIGIN_REPO" --state open --label upstream-sync-auto \
-  --json number,headRefOid,headRefName,isDraft,assignees \
+  --json number,headRefOid,headRefName,isDraft,assignees,labels \
   --jq '.[0] // empty')
 
 if [ -n "$EXISTING" ]; then
@@ -35,16 +28,17 @@ if [ -n "$EXISTING" ]; then
   HEAD_REF=$(jq -r .headRefName <<<"$EXISTING")
   IS_DRAFT=$(jq -r .isDraft <<<"$EXISTING")
   ASSIGNEES=$(jq -r '.assignees | length' <<<"$EXISTING")
+  HAS_CONFLICT_LABEL=$(jq -r '[.labels[].name] | contains(["upstream-sync-conflict"])' <<<"$EXISTING")
 
   TAG_SHA=$(gh api "repos/${ORIGIN_REPO}/git/ref/tags/sync-bot/${HEAD_REF}" \
             --jq .object.sha 2>/dev/null || echo "")
 
+  # Takeover signals (any one → skip): assignee set; conflict PR marked
+  # ready; head SHA changed vs sync-bot tag.
   TOUCHED=false
   [ "$ASSIGNEES" -gt 0 ] && TOUCHED=true
-  [ "$IS_DRAFT" = "false" ] && TOUCHED=true
-  if [ -n "$TAG_SHA" ] && [ "$HEAD_SHA" != "$TAG_SHA" ]; then
-    TOUCHED=true
-  fi
+  [ "$IS_DRAFT" = "false" ] && [ "$HAS_CONFLICT_LABEL" = "true" ] && TOUCHED=true
+  [ -n "$TAG_SHA" ] && [ "$HEAD_SHA" != "$TAG_SHA" ] && TOUCHED=true
 
   if [ "$TOUCHED" = "true" ]; then
     echo "PR #$PR_NUM appears to be in human hands — skipping today's run."
@@ -93,8 +87,9 @@ if [ -n "$HAS_CONFLICTS" ]; then
 fi
 
 # ----- 6. Tag the merge commit for tomorrow's takeover detection -------------
-git tag "sync-bot/$SYNC_BRANCH" "$MERGE_COMMIT"
-git push origin "sync-bot/$SYNC_BRANCH"
+# -f overwrites a stale tag from a prior aborted run on the same branch.
+git tag -f "sync-bot/$SYNC_BRANCH" "$MERGE_COMMIT"
+git push --force origin "sync-bot/$SYNC_BRANCH"
 
 # ----- 7. Dispatch CI/E2E only on the clean path -----------------------------
 if [ -z "$HAS_CONFLICTS" ]; then

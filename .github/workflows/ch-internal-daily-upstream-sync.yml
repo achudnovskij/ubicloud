@@ -7,12 +7,9 @@ name: ch-internal-daily-upstream-sync
 # whose PR is closed.
 
 on:
-  # Schedule is intentionally disabled during initial rollout. Re-enable once
-  # the first manual run lands a clean PR end-to-end (CI/E2E green, takeover
-  # detection working on the next-day's run).
-  # schedule:
-  #   # 06:00 PDT / 05:00 PST, Mon-Fri (GitHub cron is UTC, no DST)
-  #   - cron: '0 13 * * 1-5'
+  schedule:
+    # 06:00 PDT / 05:00 PST, Mon-Fri (GitHub cron is UTC, no DST).
+    - cron: '0 13 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -23,6 +20,11 @@ permissions:
 concurrency:
   group: upstream-sync
   cancel-in-progress: false
+
+# UTF-8 locale required by rake annotate on non-ASCII files.
+env:
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
 
 jobs:
   daily-sync:
@@ -40,10 +42,12 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ubicloud
 
-      - name: Checkout clickhouse
+      # Use the dispatched ref (defaults to clickhouse) so script changes
+      # can be tested via `gh workflow run --ref <branch>`.
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: clickhouse
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
