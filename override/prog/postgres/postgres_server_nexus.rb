@@ -35,6 +35,7 @@ AUTH
       else
         ""
       end
+
       # TODO add on_truncate: read_whole_file on file_log receiver once an applicable version is available
       vm.sshable.write_file("/home/otelcol/otel-config-override.yaml", <<OTEL_CONFIG_OVERRIDE, user: "otelcol")
 extensions:
@@ -138,11 +139,10 @@ exporters:
       max_megabytes: 100
       max_days: 7
       max_backups: 3
-  otlp/export:
-    endpoint: #{postgres_server.resource.otel_otlp_export_endpoint}
-    compression: zstd
-    timeout: 30s
-#{auth_config}
+#{build_otlp_exporter("otlp/export_otlp_data", postgres_server.resource.otel_otlp_export_endpoint, 2000, auth_config)}
+#{build_otlp_exporter("otlp/export_otlp_arrow_data", postgres_server.resource.otel_otlp_export_endpoint, 250, auth_config)}
+#{build_otlp_exporter("otlp/export_logs", postgres_server.resource.otel_otlp_export_endpoint, 5000, auth_config)}
+#{build_otlp_exporter("otlp/export_metrics", postgres_server.resource.otel_otlp_export_endpoint, 1000, auth_config)}
 processors:
   resourcedetection/ec2:
     detectors:
@@ -179,15 +179,41 @@ processors:
         value: '#{postgres_server.resource.target_server_count}'
         action: upsert
 #{tag_attributes}
+connectors:
+  routing/arrow_based:
+    error_mode: ignore
+    table:
+      - context: resource
+        condition: 'attributes["pg_stat_ch.block_format"] == "arrow_ipc"'
+        pipelines: [logs/from_otlp_arrow]
+    default_pipelines: [logs/from_otlp_default]
 service:
   extensions:
     - health_check
     - file_storage/state
     - bearertokenauth/otlp-export
   pipelines:
-    logs:
+    logs/from_otlp:
       receivers:
         - otlp
+      processors:
+        - resource/datagres
+        - resourcedetection/ec2
+        - resource/ubiMetadata
+      exporters:
+        - routing/arrow_based
+    logs/from_otlp_arrow:
+      receivers:
+        - routing/arrow_based
+      exporters:
+        - otlp/export_otlp_arrow_data
+    logs/from_otlp_default:
+      receivers:
+        - routing/arrow_based
+      exporters:
+        - otlp/export_otlp_data
+    logs/from_node_logs:
+      receivers:
         - filelog/postgresql_json
         - journald
       processors:
@@ -195,8 +221,7 @@ service:
         - resourcedetection/ec2
         - resource/ubiMetadata
       exporters:
-        - nop
-        - otlp/export
+        - otlp/export_logs
     metrics:
       receivers:
         - otlp
@@ -207,8 +232,7 @@ service:
         - resourcedetection/ec2
         - resource/ubiMetadata
       exporters:
-        - nop
-        - otlp/export
+        - otlp/export_metrics
     traces:
       receivers:
         - otlp
@@ -217,8 +241,7 @@ service:
         - resourcedetection/ec2
         - resource/ubiMetadata
       exporters:
-        - nop
-        - otlp/export
+        - otlp/export_otlp_data
   telemetry:
     resource:
       service.otelcol.location: 'postgres_resource'
@@ -256,6 +279,20 @@ OTEL_CONFIG_BASE
         node_memory_sku_total_bytes #{postgres_server.sku_memory_bytes}
       PROM
       vm.sshable.write_file("/var/lib/node_exporter/vm_sku.prom", vm_sku_prom)
+    end
+
+    def build_otlp_exporter(name, endpoint, queue_size, auth_config)
+      body = <<EXPORTER
+  #{name}:
+    endpoint: #{endpoint}
+    compression: zstd
+    timeout: 30s
+    sending_queue:
+      enabled: true
+      storage: file_storage/state
+      queue_size: #{queue_size}
+EXPORTER
+      (body + auth_config).rstrip
     end
 
     def otel_token_path

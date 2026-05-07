@@ -151,6 +151,12 @@ RSpec.describe Page do
   end
 
   context "without any api" do
+    describe "Page::Client.new" do
+      it "does not load pagerduty when no key is configured" do
+        expect(Page::Client.new.instance_variable_get(:@client)).to be_nil
+      end
+    end
+
     describe "#trigger" do
       it "triggers a page if key is present" do
         expect(Clog).to receive(:emit).with("page triggered", {page_triggered: {
