@@ -58,7 +58,9 @@ TARGET=${1:-$(git rev-parse upstream/main)}
 SYNC_DATE=$(date +%Y-%m-%d)
 SYNC_BRANCH="sync/upstream-${SYNC_DATE}"
 i=2
-while git show-ref --verify --quiet "refs/heads/$SYNC_BRANCH"; do
+# Bump if either local or remote already has the branch.
+while git show-ref --verify --quiet "refs/heads/$SYNC_BRANCH" \
+   || git ls-remote --exit-code --heads origin "$SYNC_BRANCH" >/dev/null 2>&1; do
   SYNC_BRANCH="sync/upstream-${SYNC_DATE}-${i}"
   i=$((i+1))
 done
