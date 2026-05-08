@@ -341,6 +341,7 @@ class CloverAdmin < Roda
     },
     "Page" => {
       "resolve" => object_action("Resolve", flash: "Resolve scheduled for Page", &:incr_resolve),
+      "retrigger" => object_action("Retrigger", flash: "Retrigger scheduled for Page", &:incr_retrigger),
     },
     "PostgresResource" => {
       "restart" => object_action("Restart", flash: "Restart scheduled for PostgresResource") do |obj|
@@ -1255,7 +1256,11 @@ class CloverAdmin < Roda
         r.redirect("/search?q=#{Rack::Utils.escape(id)}")
       end
 
-      @grouped_pages = Page.reverse(:created_at, :summary).exclude(severity: "info").group_by_vm_host
+      @grouped_pages = Page
+        .reverse(:created_at, :summary)
+        .exclude(severity: "info")
+        .left_join(:page_root_resource, page_id: :id)
+        .to_hash_groups(:root_resource_id)
       @classes = available_classes
       @info_pages = Page.where(severity: "info").reverse(:created_at).all
 
