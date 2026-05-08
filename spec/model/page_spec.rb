@@ -8,41 +8,44 @@ require "pagerduty"
 RSpec.describe Page do
   subject(:p) { described_class.create(tag: "dummy-tag") }
 
-  describe ".group_by_vm_host" do
-    it "groups pages by the VmHost they are related to" do
-      expect(described_class.group_by_vm_host).to eq({})
+  if Config.unfrozen_test?
+    after do
+      described_class.instance_variable_set(:@client, nil)
+    end
+  end
 
-      p1 = described_class.create(tag: "a")
-      expect(described_class.group_by_vm_host).to eq({nil => [p1]})
+  describe ".root_resources" do
+    it "returns array of root resource ids for the related object" do
+      expect(described_class.root_resources(Nic.new)).to eq []
 
-      p2 = described_class.create(tag: "b", details: {"related_resources" => []})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2]})
+      gi = GithubInstallation.new_with_id(installation_id: 1, name: "foo", type: "bar")
+      expect(described_class.root_resources(GithubRepository.new(installation: gi))).to eq [gi.id]
 
-      p3 = described_class.create(tag: "c", details: {"related_resources" => [p2.ubid]})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3]})
+      pt = PostgresTimeline.create(location_id: Location::HETZNER_FSN1_ID, access_key: "dummy-access-key", secret_key: "dummy-secret-key")
+      expect(described_class.root_resources(pt)).to eq []
 
-      vmh = Prog::Vm::HostNexus.assemble("1.2.3.4").subject
-      p4 = described_class.create(tag: "d", details: {"related_resources" => [vmh.ubid]})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3], vmh.ubid => [p4]})
+      project = Project.create(name: "test")
+      pg = create_postgres_resource(project:, location_id: Location::HETZNER_FSN1_ID)
+      expect(described_class.root_resources(pg)).to eq [pg.id]
 
-      pj = Project.create(name: "test")
-      vm = Prog::Vm::Nexus.assemble("a a", pj.id).subject
-      p5 = described_class.create(tag: "e", details: {"related_resources" => [p3.ubid, vm.ubid]})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3, p5], vmh.ubid => [p4]})
+      pv = PostgresServer.create(timeline: pt, resource_id: pg.id, is_representative: false, version: PostgresResource::DEFAULT_VERSION)
+      expect(described_class.root_resources(pv)).to eq [pg.id]
 
-      vm.update(vm_host_id: vmh.id)
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3], vmh.ubid => [p4, p5]})
+      pv = create_postgres_server(resource: pg)
+      expect(described_class.root_resources(pv)).to eq [pg.id]
+      expect(described_class.root_resources(pv.timeline)).to eq [pg.id]
 
-      p6 = described_class.create(tag: "f", details: {"related_resources" => [vm.nic.ubid]})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3], vmh.ubid => [p4, p5, p6]})
+      pv.vm.update(vm_host_id: create_vm_host.id)
+      pv.refresh
+      expect(described_class.root_resources(pv)).to eq [pv.vm.vm_host_id, pg.id]
+      expect(described_class.root_resources(pv.timeline)).to eq [pv.vm.vm_host_id, pg.id]
+    end
 
-      gi = GithubInstallation.create(installation_id: 1, name: "t", type: "t")
-      gr = Prog::Github::GithubRunnerNexus.assemble(gi, repository_name: "a", label: "ubicloud").subject
-      p7 = described_class.create(tag: "g", details: {"related_resources" => [gr.ubid]})
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3, p7], vmh.ubid => [p4, p5, p6]})
-
-      gr.update(vm_id: vm.id)
-      expect(described_class.order(:tag).group_by_vm_host).to eq({nil => [p1, p2, p3], vmh.ubid => [p4, p5, p6, p7]})
+    it "returns empty array for exceptions" do
+      nic = Nic.new
+      expect(nic).to receive(:vm).and_raise(RuntimeError)
+      expect(Clog).to receive(:emit).with("error determining root resource for page", instance_of(Hash)).and_call_original
+      expect(described_class.root_resources(nic)).to eq []
     end
   end
 
