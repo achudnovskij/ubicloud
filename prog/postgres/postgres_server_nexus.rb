@@ -654,6 +654,8 @@ SQL
       hop_configure_metrics
     end
 
+    write_otel_token if Config.postgres_otel_otlp_export_enabled && otel_token_needs_refresh?
+
     when_configure_logs_set? do
       decr_configure_logs
       hop_configure_logs
@@ -701,8 +703,6 @@ SQL
       end
       nap 60
     end
-
-    write_otel_token if Config.postgres_otel_otlp_export_enabled && otel_token_needs_refresh?
 
     nap 6 * 60 * 60
   end

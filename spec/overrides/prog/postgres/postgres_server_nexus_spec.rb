@@ -402,43 +402,76 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
         allow(Config).to receive(:postgres_otel_otlp_export_jwt_oidc_provider_id).and_return(SecureRandom.uuid)
       end
 
-      it "returns true when token file is missing" do
-        expect(sshable).to receive(:_cmd).with(anything).and_return("missing\n")
-        expect(nx.otel_token_needs_refresh?).to be true
-      end
-
-      it "returns true when token file is empty" do
-        expect(sshable).to receive(:_cmd).with(anything).and_return("exists\n")
+      it "returns true and does not cache when token file is missing or empty" do
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return("")
         expect(nx.otel_token_needs_refresh?).to be true
+        expect(st.stack.first).not_to have_key("otel_token_jwt")
       end
 
-      it "returns true when JWT is missing iat or exp claims" do
-        token = JWT.encode({"sub" => "test"}, nil, "none")
-        expect(sshable).to receive(:_cmd).with(anything).and_return("exists\n")
+      it "returns true and skips cache when JWT is missing iat" do
+        now = Time.now.to_i
+        token = JWT.encode({"exp" => now + 3600}, nil, "none")
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(token)
         expect(nx.otel_token_needs_refresh?).to be true
+        expect(st.stack.first).not_to have_key("otel_token_jwt")
+      end
+
+      it "returns true and skips cache when JWT is missing exp" do
+        now = Time.now.to_i
+        token = JWT.encode({"iat" => now}, nil, "none")
+        expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(token)
+        expect(nx.otel_token_needs_refresh?).to be true
+        expect(st.stack.first).not_to have_key("otel_token_jwt")
       end
 
       it "returns false when token is still fresh" do
         now = Time.now.to_i
         token = JWT.encode({"iat" => now, "exp" => now + 3600}, nil, "none")
-        expect(sshable).to receive(:_cmd).with(anything).and_return("exists\n")
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(token)
         expect(nx.otel_token_needs_refresh?).to be false
+        expect(st.stack.first["otel_token_jwt"]).to eq({"iat" => now, "exp" => now + 3600})
       end
 
       it "returns true when 2/3 of token validity has passed" do
         now = Time.now.to_i
-        token = JWT.encode({"iat" => now - 3000, "exp" => now - 3000 + 3600}, nil, "none")
-        expect(sshable).to receive(:_cmd).with(anything).and_return("exists\n")
+        iat = now - 3000
+        exp = now - 3000 + 3600
+        token = JWT.encode({"iat" => iat, "exp" => exp}, nil, "none")
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(token)
         expect(nx.otel_token_needs_refresh?).to be true
+        expect(st.stack.first["otel_token_jwt"]).to eq({"iat" => iat, "exp" => exp})
       end
 
-      it "returns true on JWT decode error" do
-        expect(sshable).to receive(:_cmd).with(anything).and_return("exists\n")
+      it "emits Clog and returns true on JWT decode error, leaving cache untouched" do
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return("not-a-valid-jwt")
+        expect(Clog).to receive(:emit).with("OTel token JWT decode failed", hash_including(otel_token_jwt_decode_error: hash_including(:error)))
+        expect(nx.otel_token_needs_refresh?).to be true
+        expect(st.stack.first).not_to have_key("otel_token_jwt")
+      end
+
+      it "returns false without SSH when cache shows token is within 2/3 lifetime" do
+        now = Time.now.to_i
+        st.stack.first["otel_token_jwt"] = {"iat" => now - 100, "exp" => now + 3500}
+        expect(sshable).not_to receive(:_cmd)
+        expect(nx.otel_token_needs_refresh?).to be false
+      end
+
+      it "refreshes cache when cached iat/exp is past 2/3 and SSH finds a newer token" do
+        now = Time.now.to_i
+        st.stack.first["otel_token_jwt"] = {"iat" => now - 3500, "exp" => now - 100}
+        new_token = JWT.encode({"iat" => now, "exp" => now + 3600}, nil, "none")
+        expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(new_token)
+        expect(nx.otel_token_needs_refresh?).to be false
+        expect(st.stack.first["otel_token_jwt"]).to eq({"iat" => now, "exp" => now + 3600})
+      end
+
+      it "does not call update_stack when SSH returns iat/exp identical to the cache" do
+        now = Time.now.to_i
+        stale = {"iat" => now - 3500, "exp" => now - 100}
+        st.stack.first["otel_token_jwt"] = stale
+        stale_token = JWT.encode(stale, nil, "none")
+        expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(stale_token)
+        expect(nx).not_to receive(:update_stack)
         expect(nx.otel_token_needs_refresh?).to be true
       end
     end

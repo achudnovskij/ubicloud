@@ -349,10 +349,13 @@ EXPORTER
     def otel_token_needs_refresh?
       return false unless Config.postgres_otel_otlp_export_jwt_oidc_provider_id
 
-      result = vm.sshable.cmd("sudo test -f :otel_token_path && echo exists || echo missing", otel_token_path:)
-      return true if result.strip == "missing"
+      cached = strand.stack.first["otel_token_jwt"]
+      if cached && (cached_iat = cached["iat"]) && (cached_exp = cached["exp"])
+        two_thirds_point = cached_iat + (cached_exp - cached_iat) * 2 / 3
+        return false if Time.now.to_i < two_thirds_point
+      end
 
-      token = vm.sshable.cmd("sudo cat :otel_token_path", otel_token_path:, log: false).strip
+      token = vm.sshable.cmd("sudo test -f :otel_token_path && sudo cat :otel_token_path || true", otel_token_path:, log: false).strip
       return true if token.empty?
 
       begin
@@ -362,12 +365,16 @@ EXPORTER
 
         return true unless iat && exp
 
+        new_jwt = {"iat" => iat, "exp" => exp}
+        update_stack({"otel_token_jwt" => new_jwt}) unless cached == new_jwt
+
         current_time = Time.now.to_i
         validity_duration = exp - iat
         two_thirds_point = iat + (validity_duration * 2 / 3)
 
         current_time >= two_thirds_point
-      rescue JWT::DecodeError
+      rescue JWT::DecodeError => e
+        Clog.emit("OTel token JWT decode failed", {otel_token_jwt_decode_error: {error: e.message}})
         true
       end
     end

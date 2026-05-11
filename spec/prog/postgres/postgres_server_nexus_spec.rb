@@ -1406,6 +1406,14 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
         expect(replica_nx).to receive(:update_stack_lsn).with("1/A")
         expect { replica_nx.wait }.to nap(900)
       end
+
+      it "refreshes otel token even when wait naps in the replica branch" do
+        allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(true)
+        expect(replica_server).to receive(:lsn_caught_up).and_return(true)
+        expect(replica_nx).to receive(:otel_token_needs_refresh?).and_return(true)
+        expect(replica_nx).to receive(:write_otel_token)
+        expect { replica_nx.wait }.to nap(60)
+      end
     end
   end
 
