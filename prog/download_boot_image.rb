@@ -122,23 +122,22 @@ class Prog::DownloadBootImage < Prog::Base
     },
     "github-ubuntu-2404" => {
       "x64" => {
-        "20260312.1.0" => "bbfc41f0db56fb28f5845d37bbe7f4ef1334557b27af68530117bb76ff1b6398",
-        "20260401.1.0" => "d0751f04ca3a3052c46aa3afcd23d7b22345adb670ad14b54522502cad6f4e7c",
         "20260408.1.0" => "1495548c90309169f57fbedf72ee43217c8c0bbff5910d6e4942b3d0787feca5",
+        "20260508.1.0" => "5ad16e9ad7128b4390c910e95fbcfc1c7d1920857d5facbb892b4afcfb1022ea",
       },
       "arm64" => {
-        "20260312.1.0" => "c6fb2fa0ae2912be2222a02cf8a25250d4cbaa7b876cd3b24363bb18438deb81",
         "20260401.1.0" => "2bb2b5d40a7bb8b18f2813073e5e1954ba96c6e389f63cf140db47e2f43b6367",
+        "20260508.1.0" => "bdbb69919aa9324adcb30a687911b1e8999727d13c2e4ba19deb4d418699630b",
       },
     },
     "github-ubuntu-2204" => {
       "x64" => {
-        "20260312.1.0" => "a50f161933a8ced1018b589f49fa723d2638760366b17fb0112b1e98f1d036c5",
         "20260401.1.0" => "a39e9ac4b7b8511cf30b24965fb14d21a456f930e9fc54c0831d67b24e24744e",
+        "20260508.1.0" => "af45cd5817d13f8ee488f9f2c657cde80e73ce58af6b2c036d89eb3756235d04",
       },
       "arm64" => {
-        "20260312.1.0" => "4291d401ba6d8c0407408f6f4f7c238693c939bdfb2a2d0723dc64151e751974",
         "20260401.1.0" => "79032108974f6f9eb22e22021f27d42e5d7ed4984758030ea5a42c0c16d03532",
+        "20260508.1.0" => "387f875f8c15a4bd6d6be497f47ff283d51ac91964f5bbc1b5a911af888c4d8a",
       },
     },
     "postgres-ubuntu-2204" => {
