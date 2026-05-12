@@ -1,0 +1,73 @@
+cleanup_default_locations: true
+email: postgres-team+dev@clickhouse.com
+enabled: true
+locations:
+  - account_name: dev-us-west-2-cell0-clickgres
+    name: us-west-2-cell-0
+    region: us-west-2
+    role: arn:aws:iam::423535493707:role/ClickgresCellManagementAccessRole
+  - account_name: dev-us-east-1-cell0-clickgres
+    name: us-east-1-cell-0
+    region: us-east-1
+    role: arn:aws:iam::069372914117:role/ClickgresCellManagementAccessRole
+password: PASSWORD_TEST
+dns_server_amis:
+  us-west-2:
+    arch_x64: ami-053ee446a8202ddd8
+    arch_arm64: ami-0b9a0e4bd28ad4afe
+  us-east-1:
+    arch_x64: ami-03deb8c961063af8c
+    arch_arm64: ami-0a105b59f5c9471cb
+pg_amis:
+  eu-central-1:
+    pg16:
+      arch_arm64: ami-0fab9b2ba0b9682a3
+      arch_x64: ami-0880cfa9bc6af3197
+    pg17:
+      arch_arm64: ami-0fab9b2ba0b9682a3
+      arch_x64: ami-0880cfa9bc6af3197
+    pg18:
+      arch_arm64: ami-0fab9b2ba0b9682a3
+      arch_x64: ami-0880cfa9bc6af3197
+  eu-west-1:
+    pg16:
+      arch_arm64: ami-01425e73f3dd9dcdd
+      arch_x64: ami-044be03170c50d862
+    pg17:
+      arch_arm64: ami-01425e73f3dd9dcdd
+      arch_x64: ami-044be03170c50d862
+    pg18:
+      arch_arm64: ami-01425e73f3dd9dcdd
+      arch_x64: ami-044be03170c50d862
+  us-east-1:
+    pg16:
+      arch_arm64: ami-02bc529b9fede7c3f
+      arch_x64: ami-09b61149602a34882
+    pg17:
+      arch_arm64: ami-02bc529b9fede7c3f
+      arch_x64: ami-09b61149602a34882
+    pg18:
+      arch_arm64: ami-02bc529b9fede7c3f
+      arch_x64: ami-09b61149602a34882
+  us-east-2:
+    pg16:
+      arch_arm64: ami-082a4eb7e7906f94a
+      arch_x64: ami-0cd77277f04fe4724
+    pg17:
+      arch_arm64: ami-082a4eb7e7906f94a
+      arch_x64: ami-0cd77277f04fe4724
+    pg18:
+      arch_arm64: ami-082a4eb7e7906f94a
+      arch_x64: ami-0cd77277f04fe4724
+  us-west-2:
+    pg16:
+      arch_arm64: ami-0a0669ad01c39bfec
+      arch_x64: ami-0c846fb4ec0813310
+    pg17:
+      arch_arm64: ami-0a0669ad01c39bfec
+      arch_x64: ami-0c846fb4ec0813310
+    pg18:
+      arch_arm64: ami-0a0669ad01c39bfec
+      arch_x64: ami-0c846fb4ec0813310
+project_name: clickgres-development
+project_uuid: 3fa904f0-e4dc-86d2-a919-f8b0a326206f

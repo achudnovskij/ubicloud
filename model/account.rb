@@ -27,9 +27,11 @@ class Account < Sequel::Model(:accounts)
     identities.map(&:provider).join(", ")
   end
 
-  def create_project_with_default_policy(name, reputation: "new", default_policy: true)
+  def create_project_with_default_policy(name, reputation: "new", default_policy: true, project_id: nil)
     reputation = "limited" if FREE_MAIL_DOMAINS.any? { email.end_with?("@#{it}") } && projects.none? { it.reputation == "verified" }
-    project = Project.create(name:, reputation:)
+    project = Project.new(name:, reputation:)
+    project.id = project_id if project_id
+    project.save_changes
     add_project(project)
 
     if default_policy

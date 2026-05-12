@@ -1,0 +1,17 @@
+cleanup_default_locations: true
+email: postgres-team+dev@clickhouse.com
+enabled: true
+locations:
+  - account_name: dev-us-west-2-cell0-clickgres
+    name: us-west-2-cell-0
+    region: us-west-2
+    role: arn:aws:iam::423535493707:role/ClickgresCellManagementAccessRole
+    dns_suffix: c0.us-west-2
+password: PASSWORD_TEST
+pg_amis:
+  us-west-2:
+    pg16:
+      arch_arm64: ami-0a0669ad01c39bfec
+      arch_x64: ami-0c846fb4ec0813310
+project_name: clickgres-development
+project_uuid: 3fa904f0-e4dc-86d2-a919-f8b0a326206f
