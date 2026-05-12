@@ -62,11 +62,10 @@ PGDATA=/dat/#{version}/data
     end
 
     def aws_create_bucket
-      location_constraint = (location.name == "us-east-1") ? nil : {location_constraint: location.name}
-      begin
-        blob_storage_client.create_bucket(bucket: ubid, create_bucket_configuration: location_constraint)
-      rescue ::Aws::S3::Errors::BucketAlreadyOwnedByYou
-      end
+      create_bucket_configuration = {tags: Util.aws_tags(ubid)}
+      create_bucket_configuration[:location_constraint] = location.name unless location.name == "us-east-1"
+      blob_storage_client.create_bucket(bucket: ubid, create_bucket_configuration:)
+    rescue ::Aws::S3::Errors::BucketAlreadyOwnedByYou
     end
 
     def aws_set_lifecycle_policy
@@ -108,9 +107,9 @@ PGDATA=/dat/#{version}/data
 
     def aws_setup_blob_storage
       iam_client = location.location_credential_aws.iam_client
-      policy = iam_client.create_policy(policy_name: aws_s3_policy_name, policy_document: blob_storage_policy.to_json)
+      policy = iam_client.create_policy(policy_name: aws_s3_policy_name, policy_document: blob_storage_policy.to_json, tags: Util.aws_tags(aws_s3_policy_name))
       unless Config.aws_postgres_iam_access
-        iam_client.create_user(user_name: ubid)
+        iam_client.create_user(user_name: ubid, tags: Util.aws_tags(ubid))
         iam_client.attach_user_policy(user_name: ubid, policy_arn: policy.policy.arn)
         response = iam_client.create_access_key(user_name: ubid)
         update(access_key: response.access_key.access_key_id, secret_key: response.access_key.secret_access_key)

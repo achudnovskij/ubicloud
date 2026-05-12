@@ -26,7 +26,7 @@ class Prog::Vm::Aws::Nexus < Prog::Base
     }.to_json
 
     ignore_invalid_entity do
-      iam_client.create_role({role_name:, assume_role_policy_document:})
+      iam_client.create_role({role_name:, assume_role_policy_document:, tags: Util.aws_tags(role_name)})
     end
 
     hop_create_role_policy
@@ -60,7 +60,7 @@ class Prog::Vm::Aws::Nexus < Prog::Base
     }.to_json
 
     ignore_invalid_entity do
-      iam_client.create_policy({policy_name:, policy_document:})
+      iam_client.create_policy({policy_name:, policy_document:, tags: Util.aws_tags(policy_name)})
     end
 
     hop_attach_role_policy
@@ -80,7 +80,7 @@ class Prog::Vm::Aws::Nexus < Prog::Base
 
   label def create_instance_profile
     ignore_invalid_entity do
-      iam_client.create_instance_profile({instance_profile_name:})
+      iam_client.create_instance_profile({instance_profile_name:, tags: Util.aws_tags(instance_profile_name)})
     end
 
     hop_add_role_to_instance_profile
@@ -175,7 +175,7 @@ class Prog::Vm::Aws::Nexus < Prog::Base
       min_count: 1,
       max_count: 1,
       user_data: Base64.encode64(user_data.gsub(/^(\s*# .*)?\n/, "")),
-      tag_specifications: Util.aws_tag_specifications("instance", vm.name),
+      tag_specifications: Util.aws_tag_specifications("instance", vm.name) + Util.aws_tag_specifications("volume", vm.name),
       client_token: vm.id,
       instance_market_options:,
     }
@@ -448,7 +448,7 @@ class Prog::Vm::Aws::Nexus < Prog::Base
 
     if all_tried && unsupported_azs.size >= total_azs
       Clog.emit("all azs unsupported for instance type", {retry_different_az_unsupported: {vm:, error: e.class.name, message: e.message, unsupported_azs:}})
-      Prog::PageNexus.assemble("#{vm.name} instance type unsupported in all AZs", ["InstanceTypeUnsupported", vm.id], vm.ubid, severity: "error")
+      Prog::PageNexus.assemble("#{vm.name} instance type unsupported in all AZs", ["InstanceTypeUnsupported", vm.id], vm.ubid)
       update_stack({"unsupported_azs" => unsupported_azs, "exclude_availability_zones" => []})
       nap 60 * 60
     elsif all_tried

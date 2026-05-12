@@ -128,6 +128,19 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus do
       ]
     end
 
+    it "applies Config.postgres_internal_firewall_cidrs to the internal firewall" do
+      expect(Config).to receive(:postgres_internal_firewall_cidrs).and_return(["3.143.188.173/32", "18.224.223.229/32"]).at_least(:once)
+      pg = described_class.assemble(project_id: customer_project.id, location_id:, name: "pg-name", target_vm_size: "standard-2", target_storage_size_gib: 128).subject
+
+      rules = pg.internal_firewall.firewall_rules.map { "#{it.cidr}:#{it.port_range.to_range}" }
+      expect(rules).to include(
+        "3.143.188.173/32:5432...5433",
+        "3.143.188.173/32:6432...6433",
+        "18.224.223.229/32:5432...5433",
+        "18.224.223.229/32:6432...6433",
+      )
+    end
+
     it "sets use_different_az semaphore for AWS locations when FF is set" do
       customer_project.set_ff_postgres_aws_use_different_azs_for_standbys(true)
       private_location.update(project: customer_project)
@@ -573,12 +586,6 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus do
     it "hops to refresh_certificates when refresh_certificates is set" do
       nx.incr_refresh_certificates
       expect { nx.wait }.to hop("refresh_certificates")
-    end
-
-    it "calls set_firewall_rules method of the postgres resource when update_firewall_rules is set" do
-      nx.incr_update_firewall_rules
-      expect { nx.wait }.to nap(30)
-      expect(Semaphore.where(strand_id: st.id, name: "update_firewall_rules")).to be_empty
     end
 
     it "calls handle_storage_auto_scale when check_disk_usage is set and decrements the semaphore" do

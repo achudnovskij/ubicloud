@@ -53,6 +53,7 @@ RSpec.describe Prog::Test::HaPostgresResource do
     end
 
     it "creates a postgres resource on aws and hops to wait_postgres_resource" do
+      expect(Config).to receive(:e2e_aws_assume_role).and_return(nil)
       expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
       expect(Config).to receive(:e2e_aws_secret_key).and_return("secret_key")
       allow(Aws::Credentials).to receive(:new).and_return(Aws::Credentials.new("access_key", "secret_key"))

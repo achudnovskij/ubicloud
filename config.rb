@@ -194,11 +194,15 @@ module Config
   optional :postgres_lantern_notification_email, string
   optional :postgres_notification_email, string
   override :aws_postgres_iam_access, false, bool
+<<<<<<< HEAD
   override :aws_vm_attach_ssm_permissions, false, bool
   optional :aws_s3_custom_builds_bucket_names, array(string)
   override :postgres_otel_otlp_export_enabled, false, bool
   optional :postgres_otel_otlp_export_jwt_oidc_provider_id, uuid
   optional :postgres_otel_otlp_export_additional_metadata_field, string
+=======
+  override :postgres_internal_firewall_cidrs, "", array(string)
+>>>>>>> 467d67342de3d73a5288090752c21c7b454a8a73
 
   # Logging
   optional :database_logger_level, string
@@ -236,6 +240,7 @@ module Config
   override :is_e2e, false, bool
   optional :e2e_aws_access_key, string, clear: true
   optional :e2e_aws_secret_key, string, clear: true
+  optional :e2e_aws_assume_role, string
   optional :e2e_gcp_credentials_base64_json, string, clear: true
   optional :e2e_cache_proxy_download_url, string
 

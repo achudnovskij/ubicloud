@@ -28,8 +28,7 @@ class Prog::Test::PostgresBase < Prog::Test::Base
     case provider
     when "aws"
       location = Location[provider: "aws", project_id: Config.local_e2e_postgres_test_project_id, name: aws_location_name]
-      location.location_credential_aws ||
-        LocationCredentialAws.create_with_id(location, access_key: Config.e2e_aws_access_key, secret_key: Config.e2e_aws_secret_key)
+      Prog::Test::Base.ensure_aws_e2e_credential(location)
       family = "m8gd"
       vcpus = 2
       [location.id, Option.aws_instance_type_name(family, vcpus), Option::AWS_STORAGE_SIZE_OPTIONS[family][vcpus].first.to_i]

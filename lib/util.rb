@@ -101,9 +101,12 @@ module Util
     raise CloverError.new(400, "InvalidRequest", "Invalid email address used")
   end
 
+  def self.aws_tags(name, additional_tags = {})
+    [{key: "Ubicloud", value: Config.provider_resource_tag_value}, {key: "Name", value: name}].concat(additional_tags.map { |k, v| {key: k.to_s, value: v.to_s} })
+  end
+
   def self.aws_tag_specifications(resource_type, name, additional_tags = {})
-    tags = [{key: "Ubicloud", value: Config.provider_resource_tag_value}, {key: "Name", value: name}].concat(additional_tags.map { |k, v| {key: k.to_s, value: v.to_s} })
-    [{resource_type:, tags:}].compact
+    [{resource_type:, tags: aws_tags(name, additional_tags)}]
   end
 
   def self.calculate_ips_v4

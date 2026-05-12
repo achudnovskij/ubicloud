@@ -67,6 +67,7 @@ RSpec.describe Prog::Test::PostgresResource do
     end
 
     it "creates resource on aws and hops to wait_postgres_resource" do
+      expect(Config).to receive(:e2e_aws_assume_role).and_return(nil)
       expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
       expect(Config).to receive(:e2e_aws_secret_key).and_return("secret_key")
       aws_strand = described_class.assemble(provider: "aws")
@@ -75,6 +76,30 @@ RSpec.describe Prog::Test::PostgresResource do
       LocationAz.create(location_id: location.id, az: "a", zone_id: "usw2-az1")
       expect { aws_pgr_test.start }.to hop("wait_postgres_resource")
       expect(LocationCredentialAws[location.id].access_key).to eq("access_key")
+    end
+
+    it "creates resource on aws using assume_role and hops to wait_postgres_resource" do
+      expect(Config).to receive(:e2e_aws_assume_role).and_return("arn:aws:iam::123:role/e2e").at_least(:once)
+      expect(Config).to receive(:e2e_aws_access_key).and_return(nil)
+      expect(Config).to receive(:e2e_aws_secret_key).and_return(nil)
+      aws_strand = described_class.assemble(provider: "aws")
+      aws_pgr_test = described_class.new(aws_strand)
+      location = Location[provider: "aws", project_id: nil, name: "us-west-2"]
+      LocationAz.create(location_id: location.id, az: "a", zone_id: "usw2-az1")
+      expect { aws_pgr_test.start }.to hop("wait_postgres_resource")
+      expect(LocationCredentialAws[location.id].assume_role).to eq("arn:aws:iam::123:role/e2e")
+      expect(LocationCredentialAws[location.id].access_key).to be_nil
+    end
+
+    it "fails when both assume_role and access_key are configured" do
+      expect(Config).to receive(:e2e_aws_assume_role).and_return("arn:aws:iam::123:role/e2e")
+      expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
+      expect(Config).to receive(:e2e_aws_secret_key).and_return(nil)
+      aws_strand = described_class.assemble(provider: "aws")
+      aws_pgr_test = described_class.new(aws_strand)
+      location = Location[provider: "aws", project_id: nil, name: "us-west-2"]
+      LocationAz.create(location_id: location.id, az: "a", zone_id: "usw2-az1")
+      expect { aws_pgr_test.start }.to raise_error(/cannot be combined/)
     end
 
     it "skips aws credential creation when credential already exists" do
