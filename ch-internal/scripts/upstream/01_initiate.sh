@@ -49,9 +49,11 @@ refresh_schema_caches() {
   echo "Applying test DB migrations and refreshing schema caches..."
   # Re-resolve gems: the upstream merge may have bumped Gemfile.lock to
   # reference versions that the pre-merge `bundle install` didn't fetch.
-  bundle install
-  bundle exec rake test_up
-  git add -u cache/ model/ 2>/dev/null || true
+  if bundle install && bundle exec rake test_up; then
+    git add -u cache/ model/ 2>/dev/null || true
+    return 0
+  fi
+  return 1
 }
 
 git fetch upstream
@@ -117,7 +119,22 @@ if [ "$merge_ok" -eq 0 ]; then
         git_retry add -- "$f"
       done
 
-      refresh_schema_caches
+      # Schema cache refresh requires Ruby source to parse — conflict markers
+      # in *.rb files will break it. Tolerate failure here so the PR still
+      # opens (draft, conflict-labeled) and a human can resolve. The marker
+      # below is read by ch-internal-pg-ubicloud-e2e-gate.yml to render an
+      # unchecked "Schema cache refreshed" box in the Pre-merge checks comment.
+      schema_cache_ok=1
+      refresh_schema_caches || schema_cache_ok=0
+      if [ "$schema_cache_ok" -eq 0 ]; then
+        echo "Schema cache refresh failed — committing conflict markers anyway; resolver must re-run 'bundle exec rake test_up'."
+        {
+          echo ""
+          echo "<!-- bot-schema-cache: failed -->"
+          echo ""
+          echo "_Schema cache refresh failed in the bot run (Ruby source has conflict markers). Re-run \`bundle exec rake test_up\` after resolving._"
+        } >> "$MERGE_MSG_FILE"
+      fi
 
       # core.hooksPath=/dev/null bypasses linters/formatters that would reject
       # malformed code (conflict markers don't parse). The PR will be opened as

@@ -109,6 +109,17 @@ jobs:
               hasConflicts = true;
             } catch (_) { /* exit 1 = no matches */ }
 
+            // 1b. Schema cache refresh status. 01_initiate.sh writes
+            // "<!-- bot-schema-cache: failed -->" into the merge commit body
+            // when its `rake test_up` run was skipped because Ruby files had
+            // conflict markers. Absence of the marker = treat as fresh
+            // (clean merge, cache-only conflicts, or human-amended commit).
+            let schemaCacheFailed = false;
+            try {
+              const body = execSync("git log -1 --format=%B HEAD", { encoding: 'utf8' });
+              if (body.includes('bot-schema-cache: failed')) schemaCacheFailed = true;
+            } catch (_) {}
+
             // 2. Latest pg-ubicloud E2E run for this head SHA
             const { data: runs } = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner, repo: context.repo.repo,
@@ -156,7 +167,11 @@ jobs:
 
             // 5. Sticky comment (one per PR, edited in place)
             const conflictBox = hasConflicts ? ' ' : 'x';
+            const schemaBox = schemaCacheFailed ? ' ' : 'x';
             const e2eBox = e2ePassed ? 'x' : ' ';
+            const schemaLine = schemaCacheFailed
+              ? 'Schema cache refreshed — failed in bot run; re-run `bundle exec rake test_up`'
+              : 'Schema cache refreshed';
             const e2eLine = e2eUrl
               ? `pg-ubicloud-ci E2E green ([run](${e2eUrl}))`
               : 'pg-ubicloud-ci E2E green';
@@ -165,6 +180,7 @@ jobs:
               '## Pre-merge checks',
               '',
               `- [${conflictBox}] Conflicts resolved`,
+              `- [${schemaBox}] ${schemaLine}`,
               `- [${e2eBox}] ${e2eLine}`,
             ].join('\n');
 
