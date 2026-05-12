@@ -50,7 +50,7 @@ RSpec.describe Clover, "postgres-location" do
       aws_families = aws["available_vm_families"]
       expect(aws_families.find { |f| f["name"] == "m8gd" }).to match hash_including(
         "name" => "m8gd",
-        "display_name" => "General Purpose, Graviton3",
+        "display_name" => "General Purpose, Graviton4",
         "category" => "general-purpose",
         "sizes" => be_an_instance_of(Array),
       )

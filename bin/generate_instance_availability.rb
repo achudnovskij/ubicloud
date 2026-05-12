@@ -14,23 +14,49 @@ class InstanceAvailabilityGenerator
   # Instance families we're interested in
   INSTANCE_FAMILIES = Option::AWS_FAMILY_OPTIONS
 
+  # Regions to skip (e.g. opt-in regions we don't operate in)
+  EXCLUDED_REGIONS = %w[me-south-1 me-central-1].freeze
+
   def initialize
     @data = {"providers" => {"aws" => {"locations" => {}}}}
+    @data_mutex = Mutex.new
+    @log_mutex = Mutex.new
   end
 
   def generate
-    puts "Fetching available AWS regions..."
+    log "Fetching available AWS regions..."
     regions = fetch_regions
-    puts "Found #{regions.size} regions: #{regions.join(", ")}"
+    log "Found #{regions.size} regions: #{regions.join(", ")}"
 
-    puts "\nFetching instance types from AWS regions..."
+    env_parallel = ENV["PARALLEL_REGIONS_COUNT"]
+    parallel_count = (env_parallel || "10").to_i
+    parallel_count = 1 if parallel_count < 1
+    log "Parallelism: #{parallel_count} #{env_parallel ? "(from PARALLEL_REGIONS_COUNT)" : "(default)"}"
+    log "\nFetching instance types from AWS regions (#{parallel_count} in parallel)..."
 
-    regions.each do |region|
-      puts "Processing region: #{region}"
-      process_region(region)
+    queue = Queue.new
+    regions.each { |r| queue << r }
+
+    workers = Array.new(parallel_count) do
+      Thread.new do
+        loop do
+          region = begin
+            queue.pop(true)
+          rescue ThreadError
+            break
+          end
+          log "Processing region: #{region}"
+          process_region(region)
+        end
+      end
     end
+    workers.each(&:join)
 
     @data
+  end
+
+  def log(msg)
+    @log_mutex.synchronize { puts msg }
   end
 
   private
@@ -40,7 +66,10 @@ class InstanceAvailabilityGenerator
     client = Aws::EC2::Client.new(region: "us-east-1")
 
     response = client.describe_regions
-    response.regions.map(&:region_name).sort
+    all_regions = response.regions.map(&:region_name).sort
+    excluded = all_regions & EXCLUDED_REGIONS
+    log "Excluding regions: #{excluded.join(", ")}" unless excluded.empty?
+    all_regions - EXCLUDED_REGIONS
   rescue Aws::EC2::Errors::ServiceError => e
     puts "Error fetching regions: #{e.message}"
     puts "Falling back to default regions"
@@ -91,12 +120,14 @@ class InstanceAvailabilityGenerator
 
     # Add to data structure if we found any instances
     unless families.empty?
-      @data["providers"]["aws"]["locations"][region] = {
-        "families" => families.sort.to_h.transform_values { |sizes| {"sizes" => sizes} },
-      }
+      @data_mutex.synchronize do
+        @data["providers"]["aws"]["locations"][region] = {
+          "families" => families.sort.to_h.transform_values { |sizes| {"sizes" => sizes} },
+        }
+      end
     end
   rescue Aws::EC2::Errors::ServiceError => e
-    puts "Error processing region #{region}: #{e.message}"
+    log "Error processing region #{region}: #{e.message}"
   end
 
   def extract_family(instance_type)

@@ -622,6 +622,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(false)
       expect(nx).not_to receive(:setup_otel)
 
+      expect(sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
 
@@ -851,6 +853,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx).to receive(:setup_otel)
 
       # Prometheus expectations - should contain authorization block, not basic_auth
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: /remote_write:.*authorization:.*credentials:.*my_bearer_token/m)
 
