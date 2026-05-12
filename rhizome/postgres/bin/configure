@@ -41,11 +41,7 @@ upgrade_override = "/etc/postgresql/#{v}/main/conf.d/100-upgrade.conf"
 FileUtils.rm_f(upgrade_override)
 
 # Update postgresql.conf with custom settings
-<<<<<<< HEAD
-user_configs = configure_hash["user_config"].map { |k, v| "#{k} = '#{v.to_s.gsub("\\") { "\\\\" }.gsub("'", "''")}'" }.join("\n")
-=======
 user_configs = PostgresConfig.format(configure_hash["user_config"])
->>>>>>> 467d67342de3d73a5288090752c21c7b454a8a73
 safe_write_to_file("/etc/postgresql/#{v}/main/conf.d/099-user.conf", user_configs)
 
 # Update pg_hba.conf

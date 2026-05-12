@@ -588,13 +588,10 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
 
     it "configures prometheus and metrics during initial provisioning" do
       nx.incr_initial_provisioning
-<<<<<<< HEAD
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(true)
       expect(nx).to receive(:setup_otel)
-=======
       expect(sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
       expect(sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
->>>>>>> 467d67342de3d73a5288090752c21c7b454a8a73
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
 
