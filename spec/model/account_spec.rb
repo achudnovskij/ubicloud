@@ -59,5 +59,18 @@ RSpec.describe Account do
       project = account.create_project_with_default_policy("project-2")
       expect(project.reputation).to eq("new")
     end
+
+    it "persists the project with the caller-supplied project_id" do
+      desired_id = UBID.generate(UBID::TYPE_PROJECT).to_uuid
+      project = account.create_project_with_default_policy("project-2", project_id: desired_id)
+      expect(project.id).to eq(desired_id)
+      expect(Project[desired_id]).not_to be_nil
+    end
+
+    it "auto-generates an id when project_id is not supplied" do
+      project = account.create_project_with_default_policy("project-2")
+      expect(project.id).not_to be_nil
+      expect(Project[project.id]).not_to be_nil
+    end
   end
 end

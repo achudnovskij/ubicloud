@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-06/schema#",
+  "$id": "https://github.com/clickhouse/ubicloud/setup_config.schema.json",
+  "title": "UbicloudSetupConfig",
+  "description": "Schema for the YAML consumed by UbicloudSetup.run_ch_ubi (UBICLOUD_SETUP_YAML_PATH). Shared between the ubicloud setup.rb and the clickgres-platform helm chart values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "enabled",
+    "cleanup_default_locations",
+    "email",
+    "password",
+    "project_name",
+    "project_uuid",
+    "locations"
+  ],
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "When false, run_ch_ubi is a no-op."
+    },
+    "cleanup_default_locations": {
+      "type": "boolean",
+      "description": "When true, hide_default_locations is called to hide non-clickgres locations."
+    },
+    "email": {
+      "type": "string",
+      "format": "email",
+      "minLength": 1
+    },
+    "password": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project_uuid": {
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "locations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/LocationConfig" }
+    },
+    "pg_amis": {
+      "type": "object",
+      "description": "region -> postgres_version -> arch AMI map.",
+      "additionalProperties": {
+        "type": "object",
+        "patternProperties": {
+          "^pg[0-9]+$": { "$ref": "#/definitions/ArchAmiPair" }
+        },
+        "additionalProperties": false,
+        "minProperties": 1
+      }
+    },
+    "dns_server_amis": {
+      "type": "object",
+      "description": "region -> arch AMI map for DNS server VMs.",
+      "additionalProperties": { "$ref": "#/definitions/ArchAmiPair" }
+    },
+    "bot_accounts": {
+      "type": "object",
+      "description": "logical name -> bot account.",
+      "additionalProperties": { "$ref": "#/definitions/BotAccountConfig" }
+    },
+    "oidc_providers": {
+      "type": "object",
+      "description": "target UUID -> OIDC provider.",
+      "propertyNames": {
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      },
+      "additionalProperties": { "$ref": "#/definitions/OidcProviderConfig" }
+    }
+  },
+  "definitions": {
+    "LocationConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["account_name", "name", "region", "role", "dns_suffix"],
+      "properties": {
+        "account_name": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "region": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z]{2}-[a-z]+-[0-9]+$"
+        },
+        "role": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/.+$"
+        },
+        "dns_suffix": { "type": "string", "minLength": 1 },
+        "otel_otlp_export_endpoint": {
+          "type": ["string", "null"],
+          "format": "uri"
+        }
+      }
+    },
+    "ArchAmiPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arch_x64", "arch_arm64"],
+      "properties": {
+        "arch_x64": { "$ref": "#/definitions/AmiId" },
+        "arch_arm64": { "$ref": "#/definitions/AmiId" }
+      }
+    },
+    "AmiId": {
+      "type": "string",
+      "pattern": "^ami-[0-9a-f]{8,17}$"
+    },
+    "BotAccountConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["email", "password"],
+      "properties": {
+        "email": { "type": "string", "format": "email", "minLength": 1 },
+        "password": { "type": "string", "minLength": 1 }
+      }
+    },
+    "OidcProviderConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["display_name", "url", "client_id", "client_secret"],
+      "properties": {
+        "display_name": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "client_id": { "type": "string", "minLength": 1 },
+        "client_secret": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

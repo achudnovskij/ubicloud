@@ -1,0 +1,22 @@
+cleanup_default_locations: false
+email: postgres-team+dev@clickhouse.com
+enabled: true
+locations:
+  - account_name: dev-us-west-2-cell0-clickgres
+    name: us-west-2-cell-0
+    region: us-west-2
+    role: arn:aws:iam::423535493707:role/ClickgresCellManagementAccessRole
+    dns_suffix: c0.us-west-2
+password: PASSWORD_TEST
+dns_server_amis:
+  us-west-2:
+    arch_x64: ami-053ee446a8202ddd8
+    arch_arm64: ami-0b9a0e4bd28ad4afe
+project_name: clickgres-development
+project_uuid: 3fa904f0-e4dc-86d2-a919-f8b0a326206f
+oidc_providers:
+  a1b2c3d4-e5f6-7890-abcd-ef1234567890:
+    display_name: Test OIDC Provider
+    url: https://accounts.google.com
+    client_id: test-client-id
+    client_secret: test-client-secret
