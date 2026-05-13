@@ -736,6 +736,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       standby_sshable = standby_server.vm.sshable
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(false)
 
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
       expect(standby_server).to receive(:metrics_config).and_return(metrics_config)

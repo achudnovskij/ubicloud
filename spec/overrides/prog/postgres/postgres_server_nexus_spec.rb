@@ -476,4 +476,75 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
       end
     end
   end
+
+  describe "#postgres_exporter_queries_yaml" do
+    # Verify the merge contract by stubbing override content per case rather than
+    # re-running `base.merge(override).compact` against the live override file
+    # (which would tautologically agree with the implementation). The base file
+    # is the real OSS file; override content is controlled per example.
+    before do
+      allow(YAML).to receive(:safe_load_file).and_call_original
+    end
+
+    it "adds override-only top-level keys to the result" do
+      allow(YAML).to receive(:safe_load_file).with("override/config/postgres_exporter_queries.yml")
+        .and_return({"override_only_query" => {"query" => "SELECT 1", "metrics" => []}})
+
+      parsed = YAML.safe_load(nx.send(:postgres_exporter_queries_yaml))
+
+      expect(parsed["override_only_query"]).to eq({"query" => "SELECT 1", "metrics" => []})
+      expect(parsed).to have_key("pg_stat_activity")  # base preserved
+    end
+
+    it "replaces the base block when the override reuses a base key" do
+      allow(YAML).to receive(:safe_load_file).with("override/config/postgres_exporter_queries.yml")
+        .and_return({"pg_stat_activity" => {"query" => "FORK SQL", "metrics" => [{"x" => {"usage" => "GAUGE"}}]}})
+
+      parsed = YAML.safe_load(nx.send(:postgres_exporter_queries_yaml))
+
+      expect(parsed["pg_stat_activity"]).to eq({"query" => "FORK SQL", "metrics" => [{"x" => {"usage" => "GAUGE"}}]})
+    end
+
+    it "drops a base key when the override sets that key to nil" do
+      allow(YAML).to receive(:safe_load_file).with("override/config/postgres_exporter_queries.yml")
+        .and_return({"pg_stat_activity" => nil})
+
+      parsed = YAML.safe_load(nx.send(:postgres_exporter_queries_yaml))
+
+      expect(parsed).not_to have_key("pg_stat_activity")
+      expect(parsed).to have_key("pg_stat_database")  # other base keys untouched
+    end
+
+    it "treats a nil/empty override file as no deltas (result equals base)" do
+      allow(YAML).to receive(:safe_load_file).with("override/config/postgres_exporter_queries.yml")
+        .and_return(nil)
+
+      parsed = YAML.safe_load(nx.send(:postgres_exporter_queries_yaml))
+
+      expect(parsed).to eq(YAML.safe_load_file("config/postgres_exporter_queries.yml"))
+    end
+  end
+
+  describe "#configure_metrics override end-to-end" do
+    let(:metrics_config) { {interval: "30s", endpoints: ["https://localhost:9100/metrics"], metrics_dir: "/home/ubi/postgres/metrics"} }
+
+    it "writes content carrying both base and override queries to the canonical postgres_exporter queries path" do
+      nx.incr_initial_provisioning
+      allow(Config).to receive_messages(postgres_otel_otlp_export_enabled: false, postgres_otel_otlp_export_jwt_oidc_provider_id: nil)
+      allow(nx.postgres_server).to receive(:metrics_config).and_return(metrics_config)
+      allow(nx.postgres_server.resource).to receive(:metric_destinations).and_return([])
+      allow(sshable).to receive(:_cmd)
+
+      # `pg_replica` is from override/config/postgres_exporter_queries.yml;
+      # `pg_stat_activity` is from config/postgres_exporter_queries.yml. Both being
+      # present in the tee'd content proves the override file was read and merged
+      # on top of the base before write_file ran.
+      expect(sshable).to receive(:_cmd).with(
+        "sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null",
+        stdin: a_string_including("pg_replica", "pg_stat_activity"),
+      )
+
+      expect { nx.configure_metrics }.to hop("configure_logs")
+    end
+  end
 end
