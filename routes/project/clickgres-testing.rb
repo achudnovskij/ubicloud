@@ -28,7 +28,7 @@ class Clover
         # PostgresResource and PostgresServer have one_to_one :strand, key: :id —
         # strand.id equals the model's id, so we don't need to load the strand.
         strand_ids = pg.servers.map(&:id) + [pg.id]
-        pending = DB[:semaphore].where(strand_id: strand_ids).exclude(name: "checkup").select_map(:name).uniq
+        pending = DB[:semaphore].where(strand_id: strand_ids).exclude(name: ["checkup", "use_different_az", "use_old_walg_command"]).select_map(:name).uniq
         reasons << "pending_semaphores" if pending.any?
 
         {converged: reasons.empty?, reasons:, pending_semaphores: pending}

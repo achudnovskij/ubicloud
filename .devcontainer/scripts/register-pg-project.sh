@@ -21,6 +21,7 @@ RACK_ENV=development bundle exec ruby -r ./loader -e '
     project = account.create_project_with_default_policy("default")
   end
   project.set_ff_private_locations(true)
+  project.set_ff_postgres_aws_use_different_azs_for_standbys(true)
   puts "Project \"#{project.name}\" (id: #{project.id}, ubid: #{project.ubid})"
 
   # Add POSTGRES_SERVICE_PROJECT_ID to .env.rb

@@ -203,7 +203,7 @@ RSpec.describe Clover, "clickgres-testing" do
       expect(body["reasons"]).to include("needs_convergence", "servers_not_ready", "ongoing_failover", "pending_semaphores")
     end
 
-    it "reports pending_semaphores excluding checkup" do
+    it "reports pending_semaphores excluding checkup, use_different_az, and use_old_walg_command" do
       pg = create_pg("test-pg-conv-sems")
       strand_ids = pg.servers.map(&:id) + [pg.id]
       DB[:strand].where(id: strand_ids).update(label: "wait")
@@ -212,6 +212,8 @@ RSpec.describe Clover, "clickgres-testing" do
       server = pg.representative_server
       server.incr_restart
       server.incr_checkup
+      pg.incr_use_different_az
+      pg.incr_use_old_walg_command
 
       get convergence_path(pg)
       body = JSON.parse(last_response.body)
