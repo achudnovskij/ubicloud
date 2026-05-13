@@ -23,7 +23,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
   describe "#setup_otel_collector" do
     it "writes otel config, enables and reloads otelcol-contrib, then hops to bootstrap_rhizome" do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
       expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol")
       expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config.yaml", anything, user: "otelcol")
       expect(sshable).to receive(:write_file).with("/var/lib/node_exporter/vm_sku.prom", match(/node_memory_sku_total_bytes/))
@@ -40,7 +40,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     end
 
     it "writes the SKU memory as a node exporter prom file" do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
       expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol")
       expect(sshable).to receive(:write_file).with(
         "/var/lib/node_exporter/vm_sku.prom",
@@ -51,7 +51,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     end
 
     it "writes otelcol config with metadata and export endpoint" do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
       expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol") do |_, content, _|
         expect(content).to include("exporters:")
@@ -87,7 +87,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     end
 
     it "writes otelcol config with dynamic tag attributes" do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
       postgres_server.resource.update(tags: [
         {"key" => "chc_environment", "value" => "production"},
@@ -139,7 +139,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
       end
 
       it "includes auth configuration in otel config" do
-        postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+        OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
         expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol") do |_, content, _|
           expect(content).to include("auth:")
@@ -155,7 +155,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
         standby = create_postgres_server(resource: postgres_resource, timeline: postgres_timeline, is_representative: false)
         standby_nx = Prog::Postgres::PostgresServerNexus.new(standby.strand)
         standby_sshable = standby_nx.postgres_server.vm.sshable
-        postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+        OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
         expect(standby_sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol") do |_, content, _|
           expect(content).to include("value: 'standby'")
@@ -168,7 +168,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
       end
 
       it "always calls write_otel_token" do
-        postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+        OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
         expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol")
         expect(nx).to receive(:write_otel_token)
@@ -178,7 +178,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
       it "does not include auth configuration when OIDC provider is not configured" do
         allow(Config).to receive(:postgres_otel_otlp_export_jwt_oidc_provider_id).and_return(nil)
-        postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+        OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
         expect(sshable).to receive(:write_file).with("/home/otelcol/otel-config-override.yaml", anything, user: "otelcol") do |_, content, _|
           expect(content).not_to include("auth:")
@@ -190,7 +190,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     end
 
     it "generates a valid otelcol-contrib config", no_otel_binary: false do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
 
       configs = {}
       allow(sshable).to receive(:write_file) do |path, content, **|
@@ -233,7 +233,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
 
     before do
       allow(Config).to receive(:postgres_otel_otlp_export_jwt_oidc_provider_id).and_return(oidc_provider.id)
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: "https://otel.example.com:4317")
+      OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")
     end
 
     it "returns early when OIDC provider is not configured" do
@@ -372,7 +372,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     end
 
     it "makes token request without audience when endpoint is not set" do
-      postgres_server.resource.location.update(otel_otlp_export_endpoint: nil)
+      postgres_server.resource.location.otel_otlp_destination.destroy
 
       stub_request(:post, "https://test-auth.example.com/oauth/token")
         .with { |request|

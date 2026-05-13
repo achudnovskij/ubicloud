@@ -7,6 +7,12 @@ locations:
     region: us-west-2
     role: arn:aws:iam::423535493707:role/ClickgresCellManagementAccessRole
     dns_suffix: c0.us-west-2
+    otel_otlp_destination:
+      otlp_data_endpoint: https://otel-data.example.com:4317
+      otlp_arrow_endpoint: https://otel-arrow.example.com:4317
+      logs_endpoint: https://otel-logs.example.com:4317
+      metrics_endpoint: https://otel-metrics.example.com:4317
+      auth_audience: https://otel.example.com
   - account_name: dev-us-east-1-cell0-clickgres
     name: us-east-1-cell-0
     region: us-east-1

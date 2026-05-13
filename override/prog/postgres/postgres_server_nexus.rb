@@ -36,6 +36,8 @@ AUTH
         ""
       end
 
+      destination = postgres_server.resource.otel_otlp_destination
+
       # TODO add on_truncate: read_whole_file on file_log receiver once an applicable version is available
       vm.sshable.write_file("/home/otelcol/otel-config-override.yaml", <<OTEL_CONFIG_OVERRIDE, user: "otelcol")
 extensions:
@@ -139,10 +141,10 @@ exporters:
       max_megabytes: 100
       max_days: 7
       max_backups: 3
-#{build_otlp_exporter("otlp/export_otlp_data", postgres_server.resource.otel_otlp_export_endpoint, 2000, auth_config)}
-#{build_otlp_exporter("otlp/export_otlp_arrow_data", postgres_server.resource.otel_otlp_export_endpoint, 250, auth_config)}
-#{build_otlp_exporter("otlp/export_logs", postgres_server.resource.otel_otlp_export_endpoint, 5000, auth_config)}
-#{build_otlp_exporter("otlp/export_metrics", postgres_server.resource.otel_otlp_export_endpoint, 1000, auth_config)}
+#{build_otlp_exporter("otlp/export_otlp_data", destination&.otlp_data_endpoint, 2000, auth_config)}
+#{build_otlp_exporter("otlp/export_otlp_arrow_data", destination&.otlp_arrow_endpoint, 250, auth_config)}
+#{build_otlp_exporter("otlp/export_logs", destination&.logs_endpoint, 5000, auth_config)}
+#{build_otlp_exporter("otlp/export_metrics", destination&.metrics_endpoint, 1000, auth_config)}
 processors:
   resourcedetection/ec2:
     detectors:
@@ -310,7 +312,7 @@ EXPORTER
       token_url = URI.join(oidc_provider.url, oidc_provider.token_endpoint).to_s
       auth_string = Base64.strict_encode64([CGI.escape(oidc_provider.client_id), CGI.escape(oidc_provider.client_secret)].join(":"))
 
-      audience = postgres_server.resource.otel_otlp_export_endpoint
+      audience = postgres_server.resource.otel_otlp_destination&.auth_audience
       body_params = {grant_type: "client_credentials"}
       body_params[:audience] = audience if audience
 

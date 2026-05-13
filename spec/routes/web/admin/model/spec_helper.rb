@@ -386,6 +386,11 @@ module AdminModelSpecHelper
       LocationCredentialGcp.create(project_id: "test-project", service_account_email: "test@test.iam.gserviceaccount.com", credentials_json: "{}") { it.id = location.id }
     end
 
+    def create_otel_otlp_destination
+      location = Location.create(name: "test-loc-otel", display_name: "Test Otel Location", ui_name: "Test Otel", visible: true, provider: "hetzner")
+      OtelOtlpDestination.create(otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com") { it.id = location.id }
+    end
+
     def create_minio_cluster
       project = Project.create(name: "test-project")
       ps = PrivateSubnet.create(name: "test-ps", project_id: project.id, location_id: Location::HETZNER_FSN1_ID, net4: "10.0.0.0/26", net6: "fdfa::/64")

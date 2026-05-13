@@ -96,9 +96,8 @@ module UbicloudSetup
       Clog.emit "Checking if location #{location.account_name}:#{location.region} already exists"
       created_location = Location.where(name: location.region, ui_name: location.account_name).first
       if created_location
-        Clog.emit "Location #{location.account_name}:#{location.region} already exists, not creating, will update dns_suffix #{location.dns_suffix}, otel_otlp_export_endpoint #{location.otel_otlp_export_endpoint} and location_credentials with role #{location.role}"
+        Clog.emit "Location #{location.account_name}:#{location.region} already exists, not creating, will update dns_suffix #{location.dns_suffix} and location_credentials with role #{location.role}"
         created_location.update(dns_suffix: location.dns_suffix)
-        created_location.update(otel_otlp_export_endpoint: location.otel_otlp_export_endpoint)
         # we will update location_credential if role is different
         if LocationCredentialAws.where(id: created_location.id).any?
           location_credential = LocationCredentialAws.where(id: created_location.id).update(assume_role: location.role)
@@ -120,7 +119,6 @@ module UbicloudSetup
           visible: true,
           provider: "aws",
           dns_suffix: location.dns_suffix,
-          otel_otlp_export_endpoint: location.otel_otlp_export_endpoint,
         )
         Clog.emit "Creating credentials for location #{location.region}"
         location_credential = LocationCredentialAws.create_with_id(
@@ -130,6 +128,23 @@ module UbicloudSetup
           assume_role: location.role,
         )
       end
+
+      if (dest = location.otel_otlp_destination)
+        Clog.emit "Upserting OtelOtlpDestination for location #{location.account_name}:#{location.region}"
+        attrs = {
+          otlp_data_endpoint: dest.otlp_data_endpoint,
+          otlp_arrow_endpoint: dest.otlp_arrow_endpoint,
+          logs_endpoint: dest.logs_endpoint,
+          metrics_endpoint: dest.metrics_endpoint,
+          auth_audience: dest.auth_audience,
+        }
+        if (existing = OtelOtlpDestination[created_location.id])
+          existing.update(**attrs)
+        else
+          OtelOtlpDestination.create(**attrs) { it.id = created_location.id }
+        end
+      end
+
       return {
         location:,
         location_credential:,
@@ -256,7 +271,8 @@ module UbicloudSetup
   #   attr_reader :cleanup_default_locations, :email, :password, :project_name, :locations
   # end
 
-  LocationConfig = Struct.new(:account_name, :name, :region, :role, :dns_suffix, :otel_otlp_export_endpoint)
+  LocationConfig = Struct.new(:account_name, :name, :region, :role, :dns_suffix, :otel_otlp_destination)
+  OtelOtlpDestinationConfig = Struct.new(:otlp_data_endpoint, :otlp_arrow_endpoint, :logs_endpoint, :metrics_endpoint, :auth_audience)
   # pg_amis will look like
   # pg_amis:
   #   us-east-2:
@@ -297,7 +313,13 @@ module UbicloudSetup
     end
 
     setup_yaml = YAML.safe_load_file(ubicloud_setup_yaml_path, permitted_classes: [], aliases: false).transform_keys(&:to_sym)
-    setup_yaml[:locations] = setup_yaml[:locations].map { |loc| LocationConfig.new(**loc.transform_keys(&:to_sym).slice(*LocationConfig.members)) }
+    setup_yaml[:locations] = setup_yaml[:locations].map do |loc|
+      loc = loc.transform_keys(&:to_sym)
+      if (dest = loc[:otel_otlp_destination])
+        loc[:otel_otlp_destination] = OtelOtlpDestinationConfig.new(**dest.transform_keys(&:to_sym).slice(*OtelOtlpDestinationConfig.members))
+      end
+      LocationConfig.new(**loc.slice(*LocationConfig.members))
+    end
 
     # if not setup_yaml[:pg_amis].nil?
     #   setup_yaml[:pg_amis]

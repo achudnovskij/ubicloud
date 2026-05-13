@@ -94,10 +94,24 @@
           "pattern": "^arn:aws:iam::[0-9]{12}:role/.+$"
         },
         "dns_suffix": { "type": "string", "minLength": 1 },
+        "otel_otlp_destination": { "$ref": "#/definitions/OtelOtlpDestinationConfig" },
         "otel_otlp_export_endpoint": {
           "type": ["string", "null"],
-          "format": "uri"
+          "format": "uri",
+          "description": "Deprecated. Retained for backward compatibility; ignored by setup.rb. Use otel_otlp_destination instead."
         }
+      }
+    },
+    "OtelOtlpDestinationConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["otlp_data_endpoint", "otlp_arrow_endpoint", "logs_endpoint", "metrics_endpoint", "auth_audience"],
+      "properties": {
+        "otlp_data_endpoint": { "type": "string", "format": "uri" },
+        "otlp_arrow_endpoint": { "type": "string", "format": "uri" },
+        "logs_endpoint": { "type": "string", "format": "uri" },
+        "metrics_endpoint": { "type": "string", "format": "uri" },
+        "auth_audience": { "type": "string" }
       }
     },
     "ArchAmiPair": {

@@ -331,6 +331,35 @@ RSpec.describe "UbicloudSetup" do
         assume_role: "role2",
       )
     end
+
+    it "updates an existing otel_otlp_destination in place" do
+      location = Location.create(name: "region", ui_name: "account_name", display_name: "test-location", provider: "aws", visible: true, project_id: nil)
+      OtelOtlpDestination.create(
+        otlp_data_endpoint: "https://old.example.com:4317",
+        otlp_arrow_endpoint: "https://old-arrow.example.com:4317",
+        logs_endpoint: "https://old-logs.example.com:4317",
+        metrics_endpoint: "https://old-metrics.example.com:4317",
+        auth_audience: "https://old.example.com",
+      ) { it.id = location.id }
+
+      updated = UbicloudSetup::OtelOtlpDestinationConfig.new(
+        otlp_data_endpoint: "https://new.example.com:4317",
+        otlp_arrow_endpoint: "https://new-arrow.example.com:4317",
+        logs_endpoint: "https://new-logs.example.com:4317",
+        metrics_endpoint: "https://new-metrics.example.com:4317",
+        auth_audience: "https://new.example.com",
+      )
+      UbicloudSetup.add_location(UbicloudSetup::LocationConfig.new(account_name: "account_name", name: "test-location", region: "region", role: "role", dns_suffix: "dns_suffix", otel_otlp_destination: updated))
+
+      expect(OtelOtlpDestination.count).to eq 1
+      expect(OtelOtlpDestination[location.id]).to have_attributes(
+        otlp_data_endpoint: "https://new.example.com:4317",
+        otlp_arrow_endpoint: "https://new-arrow.example.com:4317",
+        logs_endpoint: "https://new-logs.example.com:4317",
+        metrics_endpoint: "https://new-metrics.example.com:4317",
+        auth_audience: "https://new.example.com",
+      )
+    end
   end
 
   describe "with project and location" do
@@ -582,6 +611,17 @@ RSpec.describe "UbicloudSetup" do
       expect(Account.count).to eq 2
       expect(Account.where(email: "observability-bot-test@clickhouse.com").count).to eq 1
       expect(ApiKey.count).to eq 2
+
+      us_west_2 = Location.where(name: "us-west-2", ui_name: "dev-us-west-2-cell0-clickgres").first
+      us_east_1 = Location.where(name: "us-east-1", ui_name: "dev-us-east-1-cell0-clickgres").first
+      expect(OtelOtlpDestination[us_west_2.id]).to have_attributes(
+        otlp_data_endpoint: "https://otel-data.example.com:4317",
+        otlp_arrow_endpoint: "https://otel-arrow.example.com:4317",
+        logs_endpoint: "https://otel-logs.example.com:4317",
+        metrics_endpoint: "https://otel-metrics.example.com:4317",
+        auth_audience: "https://otel.example.com",
+      )
+      expect(OtelOtlpDestination[us_east_1.id]).to be_nil
     end
 
     it "fails on missing DNS Suffix" do
