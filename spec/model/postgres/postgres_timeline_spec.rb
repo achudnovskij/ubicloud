@@ -287,15 +287,15 @@ PGDATA=/dat/17/data
     it "creates bucket" do
       expect(postgres_timeline).to receive(:location).and_return(instance_double(Location, aws?: true, provider_dispatcher_group_name: "aws", name: "us-east-2", location_credential_aws: instance_double(LocationCredentialAws, credentials: nil))).at_least(:once)
       s3_client.stub_responses(:create_bucket)
-      expect(s3_client).to receive(:create_bucket).with({bucket: postgres_timeline.ubid, create_bucket_configuration: {location_constraint: "us-east-2"}}).and_return(true)
-      expect(postgres_timeline.create_bucket).to be(true)
+      expect(s3_client).to receive(:create_bucket).with({bucket: postgres_timeline.ubid, create_bucket_configuration: {tags: Util.aws_tags(postgres_timeline.ubid), location_constraint: "us-east-2"}})
+      postgres_timeline.create_bucket
     end
 
     it "creates bucket in us-east-1" do
       expect(postgres_timeline).to receive(:location).and_return(instance_double(Location, aws?: true, provider_dispatcher_group_name: "aws", name: "us-east-1", location_credential_aws: instance_double(LocationCredentialAws, credentials: nil))).at_least(:once)
       s3_client.stub_responses(:create_bucket)
-      expect(s3_client).to receive(:create_bucket).with({bucket: postgres_timeline.ubid, create_bucket_configuration: nil}).and_return(true)
-      expect(postgres_timeline.create_bucket).to be(true)
+      expect(s3_client).to receive(:create_bucket).with({bucket: postgres_timeline.ubid, create_bucket_configuration: {tags: Util.aws_tags(postgres_timeline.ubid)}})
+      postgres_timeline.create_bucket
     end
 
     it "sets lifecycle policy" do

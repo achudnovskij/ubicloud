@@ -199,6 +199,7 @@ module Config
   override :postgres_otel_otlp_export_enabled, false, bool
   optional :postgres_otel_otlp_export_jwt_oidc_provider_id, uuid
   optional :postgres_otel_otlp_export_additional_metadata_field, string
+  override :postgres_internal_firewall_cidrs, "", array(string)
 
   # Logging
   optional :database_logger_level, string
@@ -236,6 +237,7 @@ module Config
   override :is_e2e, false, bool
   optional :e2e_aws_access_key, string, clear: true
   optional :e2e_aws_secret_key, string, clear: true
+  optional :e2e_aws_assume_role, string
   optional :e2e_gcp_credentials_base64_json, string, clear: true
   optional :e2e_cache_proxy_download_url, string
 

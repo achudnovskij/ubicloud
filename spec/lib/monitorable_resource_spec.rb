@@ -63,6 +63,76 @@ RSpec.describe MonitorableResource do
       expect(postgres_server).to receive(:reload).and_raise(StandardError)
       expect { r_w_event_loop.open_resource_session }.to raise_error(StandardError)
     end
+
+    describe "ssh failure tracking" do
+      let(:now) { Time.now }
+
+      before do
+        allow(Time).to receive(:now).and_return(now)
+      end
+
+      it "re-raises Sequel::DatabaseDisconnectError without paging" do
+        expect(postgres_server).to receive(:reload).and_raise(Sequel::DatabaseDisconnectError).twice
+        expect { r_w_event_loop.open_resource_session }.to raise_error(Sequel::DatabaseDisconnectError)
+        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(Sequel::DatabaseDisconnectError)
+        expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
+      end
+
+      it "does not page if failure has not persisted past the threshold" do
+        expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).twice
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD - 1)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
+      end
+
+      it "pages once threshold is exceeded, suppresses re-page, and resolves on recovery" do
+        expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).exactly(3).times
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+
+        past = now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1
+        allow(Time).to receive(:now).and_return(past)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        page = Page.from_tag_parts("SshableUnreachable", postgres_server.id)
+        expect(page.summary).to start_with("#{postgres_server.ubid} sshable unreachable for ")
+        expect(page.severity).to eq("error")
+        summary = page.summary
+
+        allow(Time).to receive(:now).and_return(past + 10)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        expect(page.reload.summary).to eq(summary)
+
+        expect(postgres_server).to receive(:init_health_monitor_session).and_return("session")
+        r_w_event_loop.open_resource_session
+        expect(Semaphore.where(strand_id: page.id, name: "resolve").count).to eq(1)
+      end
+
+      it "tolerates the page being absent on recovery" do
+        expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).twice
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        allow(Time).to receive(:now).and_return(now + described_class::OPEN_SESSION_FAILURE_PAGE_THRESHOLD + 1)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        Page.from_tag_parts("SshableUnreachable", postgres_server.id).destroy
+        expect(postgres_server).to receive(:init_health_monitor_session).and_return("session")
+        expect { r_w_event_loop.open_resource_session }.not_to raise_error
+      end
+
+      it "clears tracking on success without raising or resolving a page" do
+        expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError).ordered
+        expect(postgres_server).to receive(:init_health_monitor_session).and_return("session").ordered
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        r_w_event_loop.open_resource_session
+        expect(Page.from_tag_parts("SshableUnreachable", postgres_server.id)).to be_nil
+      end
+
+      it "clears tracking when resource is deleted" do
+        expect(postgres_server).to receive(:init_health_monitor_session).and_raise(IOError)
+        expect { r_w_event_loop.open_resource_session }.to raise_error(IOError)
+        postgres_server.destroy
+        expect { r_w_event_loop.open_resource_session }.to change(r_w_event_loop, :deleted).from(false).to(true)
+      end
+    end
   end
 
   describe "#check_pulse" do
@@ -287,6 +357,31 @@ RSpec.describe MonitorableResource do
         expect(postgres_server).to receive(:check_pulse).and_return({reading: "up", reading_rpt: 1})
         r_w_event_loop.check_pulse
       end
+    end
+  end
+
+  describe "#check_pulse stale retry init failure" do
+    let(:session) { {ssh_session: Net::SSH::Connection::Session.allocate, last_pulse: Time.now - 10} }
+    let(:ex) { IOError.new("closed stream") }
+
+    before do
+      r_without_event_loop.instance_variable_set(:@session, session)
+    end
+
+    it "drops the session so next cycle reinits on ssh connection error" do
+      expect(vm_host).to receive(:check_pulse).and_raise(ex)
+      expect(session[:ssh_session]).to receive(:shutdown!)
+      expect(vm_host).to receive(:init_health_monitor_session).and_raise(Net::SSH::Disconnect)
+      expect { r_without_event_loop.check_pulse }.to raise_error(Net::SSH::Disconnect)
+      expect(r_without_event_loop.instance_variable_get(:@session)).to be_nil
+    end
+
+    it "lets non-ssh exceptions propagate without dropping the session" do
+      expect(vm_host).to receive(:check_pulse).and_raise(ex)
+      expect(session[:ssh_session]).to receive(:shutdown!)
+      expect(vm_host).to receive(:init_health_monitor_session).and_raise(Sequel::DatabaseDisconnectError)
+      expect { r_without_event_loop.check_pulse }.to raise_error(Sequel::DatabaseDisconnectError)
+      expect(r_without_event_loop.instance_variable_get(:@session)).to eq(session)
     end
   end
 end

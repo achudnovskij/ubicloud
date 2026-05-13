@@ -576,6 +576,13 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
     end
   end
 
+  describe "#postgres_exporter_queries_yaml" do
+    it "returns YAML containing all keys from config/postgres_exporter_queries.yml" do
+      expect(YAML.safe_load(nx.send(:postgres_exporter_queries_yaml)))
+        .to include(YAML.safe_load_file("config/postgres_exporter_queries.yml"))
+    end
+  end
+
   describe "#configure_metrics" do
     let(:metrics_config) { {interval: "30s", endpoints: ["https://localhost:9100/metrics"], metrics_dir: "/home/ubi/postgres/metrics"} }
 
@@ -583,6 +590,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       nx.incr_initial_provisioning
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(true)
       expect(nx).to receive(:setup_otel)
+      expect(sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
 
@@ -613,6 +622,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(false)
       expect(nx).not_to receive(:setup_otel)
 
+      expect(sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
 
@@ -653,6 +664,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       allow(Config).to receive(:postgres_otel_otlp_export_enabled).and_return(true)
       expect(nx).to receive(:setup_otel)
       expect(nx.postgres_server.resource).to receive(:use_old_walg_command_set?).and_return(false)
+      expect(sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: anything)
 
@@ -690,6 +703,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx).to receive(:setup_otel)
 
       # Prometheus expectations
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: /ubicloud_resource_role: standby/)
 
@@ -753,6 +768,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx).to receive(:setup_otel)
 
       # Prometheus expectations
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: /ubicloud_resource_role: standby/)
 
@@ -794,6 +811,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx).to receive(:setup_otel)
 
       # Prometheus expectations
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: /remote_write:.*url:.*metrics\.example\.com/m)
 
@@ -834,6 +853,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx).to receive(:setup_otel)
 
       # Prometheus expectations - should contain authorization block, not basic_auth
+      expect(standby_sshable).to receive(:_cmd).with("sudo mkdir -p /usr/local/share/postgresql")
+      expect(standby_sshable).to receive(:_cmd).with("sudo tee /usr/local/share/postgresql/postgres_exporter_queries.yaml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/web-config.yml > /dev/null", stdin: anything)
       expect(standby_sshable).to receive(:_cmd).with("sudo -u prometheus tee /home/prometheus/prometheus.yml > /dev/null", stdin: /remote_write:.*authorization:.*credentials:.*my_bearer_token/m)
 
@@ -1475,8 +1496,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(nx).to receive(:decr_fence)
       expect(server).to receive(:_run_query).with("CHECKPOINT; CHECKPOINT; CHECKPOINT;")
       expect(sshable).to receive(:_cmd).with("sudo postgres/bin/lockout 17")
-      expect(sshable).to receive(:_cmd).with("sudo pg_ctlcluster 17 main stop -m smart")
       expect(sshable).to receive(:_cmd).with("sudo systemctl stop postgres-metrics.timer")
+      expect(sshable).to receive(:_cmd).with("sudo pg_ctlcluster 17 main stop -m fast")
       expect { nx.fence }.to hop("wait_in_fence")
     end
 

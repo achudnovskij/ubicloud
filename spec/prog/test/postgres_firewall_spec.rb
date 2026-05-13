@@ -77,6 +77,7 @@ RSpec.describe Prog::Test::PostgresFirewall do
     end
 
     it "creates resource on aws and hops to wait_postgres_resource" do
+      expect(Config).to receive(:e2e_aws_assume_role).and_return(nil)
       expect(Config).to receive(:e2e_aws_access_key).and_return("access_key")
       expect(Config).to receive(:e2e_aws_secret_key).and_return("secret_key")
       aws_strand = described_class.assemble(provider: "aws")

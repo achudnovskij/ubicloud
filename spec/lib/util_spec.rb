@@ -30,6 +30,14 @@ RSpec.describe Util do
     end
   end
 
+  describe "#aws_tags" do
+    it "uses configured tag value and merges additional tags" do
+      expect(Config).to receive(:provider_resource_tag_value).and_return("my-controlplane")
+      result = described_class.aws_tags("test-vm", Owner: "team")
+      expect(result).to eq([{key: "Ubicloud", value: "my-controlplane"}, {key: "Name", value: "test-vm"}, {key: "Owner", value: "team"}])
+    end
+  end
+
   describe "#aws_tag_specifications" do
     it "uses configured tag value" do
       expect(Config).to receive(:provider_resource_tag_value).and_return("my-controlplane")

@@ -20,4 +20,21 @@ class Prog::Test::Base < Prog::Base
       project_id: parsed["project_id"],
       service_account_email: parsed["client_email"])
   end
+
+  # Prefer IAM assume-role auth when Config.e2e_aws_assume_role is set,
+  # otherwise fall back to static access_key/secret_key
+  def self.ensure_aws_e2e_credential(location)
+    return if LocationCredentialAws[location.id]
+    assume_role = Config.e2e_aws_assume_role
+    access_key = Config.e2e_aws_access_key
+    secret_key = Config.e2e_aws_secret_key
+    if assume_role && (access_key || secret_key)
+      raise "e2e_aws_assume_role cannot be combined with e2e_aws_access_key/e2e_aws_secret_key"
+    end
+    if assume_role
+      LocationCredentialAws.create_with_id(location, assume_role:)
+    else
+      LocationCredentialAws.create_with_id(location, access_key:, secret_key:)
+    end
+  end
 end

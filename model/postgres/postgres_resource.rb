@@ -23,7 +23,7 @@ class PostgresResource < Sequel::Model
   plugin ResourceMethods, redacted_columns: [:root_cert_1, :root_cert_2, :server_cert, :trusted_ca_certs, :client_root_cert_1, :client_root_cert_2, :client_cert],
     encrypted_columns: [:superuser_password, :root_cert_key_1, :root_cert_key_2, :server_cert_key, :client_root_cert_key_1, :client_root_cert_key_2, :client_cert_key]
   plugin ProviderDispatcher, __FILE__
-  plugin SemaphoreMethods, :initial_provisioning, :update_firewall_rules, :refresh_dns_record, :update_billing_records,
+  plugin SemaphoreMethods, :initial_provisioning, :refresh_dns_record, :update_billing_records,
     :destroy, :refresh_certificates, :use_different_az, :use_old_walg_command, :check_disk_usage,
     :storage_auto_scale_action_performed_80, :storage_auto_scale_action_performed_85, :storage_auto_scale_action_performed_90,
     :storage_auto_scale_canceled, :storage_auto_scale_not_cancellable, :skip_strict_memory_overcommit
@@ -178,6 +178,12 @@ class PostgresResource < Sequel::Model
   end
 
   PG_FIREWALL_RULE_PORT_RANGES = [Sequel.pg_range(5432..5432), Sequel.pg_range(6432..6432)].freeze
+
+  def internal_firewall_rules
+    Config.control_plane_outbound_cidrs.map { {cidr: it, port_range: Sequel.pg_range(22..22)} } +
+      ([private_subnet.net4.to_s, private_subnet.net6.to_s] + Config.postgres_internal_firewall_cidrs).flat_map { |cidr| PG_FIREWALL_RULE_PORT_RANGES.map { |port_range| {cidr:, port_range:} } }
+  end
+
   def pg_firewall_rules(firewall: customer_firewall)
     return [] unless firewall
 
