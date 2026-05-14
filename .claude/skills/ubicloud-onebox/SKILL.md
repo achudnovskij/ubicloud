@@ -32,7 +32,7 @@ If it errors with a token/decryption failure (e.g. `Unable to decrypt encrypted 
 
 ```bash
 .devcontainer/scripts/invoke_ubicloud_api_curl.sh POST \
-  /project/default/location/aws-us-west-2/postgres/<name> \
+  /project/default/location/us-west-2-cell-0/postgres/<name> \
   -d '{"size": "m8gd.large", "storage_size": 118}'
 ```
 
@@ -50,21 +50,21 @@ The script polls every 15 seconds (default timeout: 600s) and exits 0 when the t
 
 ```bash
 .devcontainer/scripts/invoke_ubicloud_api_curl.sh GET \
-  /project/default/location/aws-us-west-2/postgres/<name>
+  /project/default/location/us-west-2-cell-0/postgres/<name>
 ```
 
 ### List all PostgreSQL servers
 
 ```bash
 .devcontainer/scripts/invoke_ubicloud_api_curl.sh GET \
-  /project/default/location/aws-us-west-2/postgres
+  /project/default/location/us-west-2-cell-0/postgres
 ```
 
 ### Modify a PostgreSQL server (HA, size, etc.)
 
 ```bash
 .devcontainer/scripts/invoke_ubicloud_api_curl.sh PATCH \
-  /project/default/location/aws-us-west-2/postgres/<name> \
+  /project/default/location/us-west-2-cell-0/postgres/<name> \
   -d '{"ha_type": "sync"}'
 ```
 
@@ -72,7 +72,7 @@ The script polls every 15 seconds (default timeout: 600s) and exits 0 when the t
 
 ```bash
 .devcontainer/scripts/invoke_ubicloud_api_curl.sh DELETE \
-  /project/default/location/aws-us-west-2/postgres/<name>
+  /project/default/location/us-west-2-cell-0/postgres/<name>
 ```
 
 Returns 204 on success. Wait for deletion to complete:

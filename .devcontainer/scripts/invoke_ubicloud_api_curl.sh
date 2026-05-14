@@ -5,9 +5,9 @@
 # Usage:
 #   invoke_ubicloud_api_curl.sh <method> <path> [extra curl args...]
 #   invoke_ubicloud_api_curl.sh GET /project
-#   invoke_ubicloud_api_curl.sh GET /project/default/location/aws-us-west-2/postgres
-#   invoke_ubicloud_api_curl.sh POST /project/default/location/aws-us-west-2/postgres/mydb -d '{"size":"m8gd.large","storage_size":118}'
-#   invoke_ubicloud_api_curl.sh DELETE /project/default/location/aws-us-west-2/postgres/mydb
+#   invoke_ubicloud_api_curl.sh GET /project/default/location/us-west-2-cell-0/postgres
+#   invoke_ubicloud_api_curl.sh POST /project/default/location/us-west-2-cell-0/postgres/mydb -d '{"size":"m8gd.large","storage_size":118}'
+#   invoke_ubicloud_api_curl.sh DELETE /project/default/location/us-west-2-cell-0/postgres/mydb
 
 set -e
 
