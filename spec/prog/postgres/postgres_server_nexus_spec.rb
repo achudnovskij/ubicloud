@@ -1110,6 +1110,19 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
   end
 
   describe "#run_post_installation_script" do
+    # The override at override/prog/postgres/postgres_server_nexus.rb prepends a
+    # CREATE EXTENSION pg_stat_ch step on STANDARD primaries, which calls
+    # d_check itself before delegating to super. Stub the CREATE EXTENSION
+    # psql call here so the prepend can run without interfering with the base
+    # cases below, and use `allow` on the daemonizer check so both the override
+    # and super can read the status.
+    before do
+      allow(sshable).to receive(:_cmd).with(
+        "PGOPTIONS='-c statement_timeout=60s' psql -U postgres -t --csv -v 'ON_ERROR_STOP=1'",
+        hash_including(stdin: /CREATE EXTENSION IF NOT EXISTS pg_stat_ch/),
+      ).and_return("")
+    end
+
     it "creates extensions for non-standard flavor and hops wait when succeeded" do
       postgres_server.resource.update(flavor: PostgresResource::Flavor::PARADEDB)
       expect(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
@@ -1120,25 +1133,25 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect { nx.run_post_installation_script }.to hop("wait")
     end
 
-    it "skips extension creation for standard flavor and hops wait when succeeded" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
+    it "hops wait when succeeded on standard flavor (pg_stat_ch created by override)" do
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
       expect { nx.run_post_installation_script }.to hop("wait")
     end
 
     it "starts the post installation script when not started" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("NotStarted")
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("NotStarted")
       expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script")
       expect { nx.run_post_installation_script }.to nap(1)
     end
 
     it "starts the post installation script when failed" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("Failed")
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("Failed")
       expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script")
       expect { nx.run_post_installation_script }.to nap(1)
     end
 
     it "naps when the post installation script is still running" do
-      expect(sshable).to receive(:d_check).with("post_installation_script").and_return("InProgress")
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("InProgress")
       expect { nx.run_post_installation_script }.to nap(1)
     end
   end

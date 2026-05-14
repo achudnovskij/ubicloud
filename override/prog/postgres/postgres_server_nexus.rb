@@ -7,6 +7,15 @@ class Prog::Postgres::PostgresServerNexus
   label :setup_otel_collector
 
   module PrependMethods
+    def run_post_installation_script
+      if postgres_server.primary? &&
+          postgres_server.resource.flavor == PostgresResource::Flavor::STANDARD &&
+          vm.sshable.d_check("post_installation_script") == "Succeeded"
+        postgres_server.run_query("CREATE EXTENSION IF NOT EXISTS pg_stat_ch;")
+      end
+      super
+    end
+
     def setup_otel_collector
       register_deadline("bootstrap_rhizome", 2 * 60)
       setup_otel

@@ -4,12 +4,18 @@ class PostgresServer
   module PrependMethods
     def configure_hash
       result = super
-      result.merge(configs: result[:configs].merge(
+      extra_configs = {
         "pg_stat_ch.extra_attributes" => "'#{pg_stat_ch_extra_attributes}'",
         "pg_stat_ch.queue_capacity" => pg_stat_ch_queue_capacity.to_s,
         "pg_stat_ch.string_area_size" => pg_stat_ch_string_area_size.to_s,
         "pg_stat_ch.use_otel" => "on",
-      ))
+        "pg_stat_ch.otel_arrow_passthrough" => "on",
+      }
+      if resource.flavor == PostgresResource::Flavor::STANDARD
+        base_libs = result[:configs]["shared_preload_libraries"].tr("'", "")
+        extra_configs["shared_preload_libraries"] = "'#{base_libs},pg_stat_ch'"
+      end
+      result.merge(configs: result[:configs].merge(extra_configs))
     end
 
     def pg_stat_ch_extra_attributes

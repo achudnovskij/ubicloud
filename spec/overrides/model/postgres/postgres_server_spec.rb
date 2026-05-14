@@ -80,8 +80,24 @@ RSpec.describe PostgresServer::PrependMethods do # rubocop:disable RSpec/SpecFil
       expect(value).to eq(postgres_server.pg_stat_ch_string_area_size.to_s)
     end
 
+    it "enables pg_stat_ch.otel_arrow_passthrough so the bgworker emits Arrow IPC batches" do
+      expect(postgres_server.configure_hash[:configs]["pg_stat_ch.otel_arrow_passthrough"]).to eq("on")
+    end
+
     it "does not set pg_stat_ch.otel_log_queue_size (kept at compile default)" do
       expect(postgres_server.configure_hash[:configs]).not_to have_key("pg_stat_ch.otel_log_queue_size")
+    end
+
+    it "appends pg_stat_ch to shared_preload_libraries for standard flavor" do
+      expect(postgres_server.configure_hash[:configs]["shared_preload_libraries"]).to eq("'pg_cron,pg_stat_statements,pg_stat_ch'")
+    end
+
+    it "leaves shared_preload_libraries untouched for non-standard flavors" do
+      resource.update(flavor: PostgresResource::Flavor::PARADEDB)
+      base_method = postgres_server.method(:configure_hash).super_method
+      base_libs = base_method.call[:configs]["shared_preload_libraries"]
+      expect(postgres_server.configure_hash[:configs]["shared_preload_libraries"]).to eq(base_libs)
+      expect(postgres_server.configure_hash[:configs]["shared_preload_libraries"]).not_to include("pg_stat_ch")
     end
 
     it "overrides the base configure_hash" do

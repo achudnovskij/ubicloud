@@ -21,6 +21,49 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
     allow(Config).to receive(:postgres_service_project_id).and_return(service_project.id)
   end
 
+  describe "#run_post_installation_script" do
+    it "creates pg_stat_ch for standard flavor primary when post-installation succeeds" do
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
+      expect(sshable).to receive(:_cmd).with(
+        "PGOPTIONS='-c statement_timeout=60s' psql -U postgres -t --csv -v 'ON_ERROR_STOP=1'",
+        hash_including(stdin: /CREATE EXTENSION IF NOT EXISTS pg_stat_ch/),
+      ).and_return("")
+      expect { nx.run_post_installation_script }.to hop("wait")
+    end
+
+    it "does not create pg_stat_ch for non-standard flavors" do
+      # LANTERN rather than PARADEDB so super's paradedb_and_primary? branch
+      # does not fire and try to run its own CREATE EXTENSION DDL.
+      postgres_server.resource.update(flavor: PostgresResource::Flavor::LANTERN)
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
+      expect(sshable).not_to receive(:_cmd).with(
+        anything,
+        hash_including(stdin: /CREATE EXTENSION IF NOT EXISTS pg_stat_ch/),
+      )
+      expect { nx.run_post_installation_script }.to hop("wait")
+    end
+
+    it "does not create pg_stat_ch on standby servers" do
+      postgres_server.update(timeline_access: "fetch", synchronization_status: "ready")
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("Succeeded")
+      expect(sshable).not_to receive(:_cmd).with(
+        anything,
+        hash_including(stdin: /CREATE EXTENSION IF NOT EXISTS pg_stat_ch/),
+      )
+      expect { nx.run_post_installation_script }.to hop("wait")
+    end
+
+    it "does not run CREATE EXTENSION when post-installation has not finished yet" do
+      allow(sshable).to receive(:d_check).with("post_installation_script").and_return("NotStarted")
+      expect(sshable).to receive(:d_run).with("post_installation_script", "sudo", "postgres/bin/post-installation-script")
+      expect(sshable).not_to receive(:_cmd).with(
+        anything,
+        hash_including(stdin: /CREATE EXTENSION IF NOT EXISTS pg_stat_ch/),
+      )
+      expect { nx.run_post_installation_script }.to nap(1)
+    end
+  end
+
   describe "#setup_otel_collector" do
     it "writes otel config, enables and reloads otelcol-contrib, then hops to bootstrap_rhizome" do
       OtelOtlpDestination.create_with_id(postgres_server.resource.location, otlp_data_endpoint: "https://otel.example.com:4317", otlp_arrow_endpoint: "https://otel.example.com:4317", logs_endpoint: "https://otel.example.com:4317", metrics_endpoint: "https://otel.example.com:4317", auth_audience: "https://otel.example.com:4317")

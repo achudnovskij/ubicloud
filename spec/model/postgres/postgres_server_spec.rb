@@ -130,7 +130,7 @@ RSpec.describe PostgresServer do
 
     it "puts pg_analytics to shared_preload_libraries for ParadeDB" do
       postgres_server.timeline_access = "push"
-      expect(resource).to receive(:flavor).and_return(PostgresResource::Flavor::PARADEDB)
+      expect(resource).to receive(:flavor).and_return(PostgresResource::Flavor::PARADEDB).at_least(:once)
       expect(postgres_server.configure_hash[:configs]).to include("shared_preload_libraries" => "'pg_cron,pg_stat_statements,pg_analytics,pg_search'")
     end
 
