@@ -9,7 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
-json=$("$SCRIPT_DIR/invoke_ubicloud_api_curl.sh" GET /project/default/location/aws-us-west-2/postgres)
+json=$("$SCRIPT_DIR/invoke_ubicloud_api_curl.sh" GET /project/default/location/us-west-2-cell-0/postgres)
 
 strand_labels=$(cd "$PROJECT_ROOT" && bundle exec ruby -e "
 require_relative 'loader'

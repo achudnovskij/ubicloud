@@ -65,7 +65,7 @@ RACK_ENV=development bundle exec ruby -r ./loader -e '
   assume_role = ARGV[1]
   project = Project.first(name: "default")
 
-  display_name = "aws-#{region}"
+  display_name = "#{region}-cell-0"
   loc = Location.first(project_id: project.id, display_name: display_name)
   if loc
     puts "Location \"#{display_name}\" already exists (id: #{loc.id})"

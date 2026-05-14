@@ -7,7 +7,7 @@
 #   wait_for_postgres_state.sh e2e-test running 600
 #
 # Exits 0 when the state is reached, 1 on timeout.
-# Uses "default" project and aws-us-west-2 location.
+# Uses "default" project and us-west-2-cell-0 location.
 
 set -e
 
@@ -23,13 +23,13 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   # For "deleted" state, check for 404
   if [ "$TARGET_STATE" = "deleted" ]; then
     HTTP_CODE=$("$SCRIPT_DIR/invoke_ubicloud_api_curl.sh" GET \
-      "/project/default/location/aws-us-west-2/postgres/$NAME" \
+      "/project/default/location/us-west-2-cell-0/postgres/$NAME" \
       -o /dev/null -w "%{http_code}")
     STATE="$HTTP_CODE"
     [ "$HTTP_CODE" = "404" ] && TARGET_STATE_LABEL="deleted (404)" && STATE="deleted"
   else
     STATE=$("$SCRIPT_DIR/invoke_ubicloud_api_curl.sh" GET \
-      "/project/default/location/aws-us-west-2/postgres/$NAME" | jq -r '.state')
+      "/project/default/location/us-west-2-cell-0/postgres/$NAME" | jq -r '.state')
   fi
 
   echo "$(date +%H:%M:%S) $NAME state=$STATE"
