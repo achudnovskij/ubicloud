@@ -1,0 +1,189 @@
+##
+## Custom queries for postgres_exporter (ClickHouse override).
+##
+## Layered on top of the OSS base via Overrider/PrependMethods.
+## Top-level keys here are query names; final Prometheus metric names
+## are `{query_block_name}_{column_name}`. Stutter-free renames matter.
+##
+## Covered topics:
+##   - replica-side lag                       (pg_replica   → pg_replica_*)
+##   - slot retention + sender lag (joined)   (pg_replication → pg_replication_*)
+##   - installed extension inventory          (pg_extension → pg_extension_info)
+##   - pg_stat_ch export pipeline stats       (pg_stat_ch   → pg_stat_ch_*)
+##
+
+pg_replica:
+  query: |
+    SELECT
+      CASE WHEN pg_is_in_recovery() THEN EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) END AS lag_seconds,
+      CASE WHEN pg_is_in_recovery() THEN pg_wal_lsn_diff(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()) END AS lag_bytes,
+      pg_is_in_recovery()::int AS in_recovery
+  master: true
+  metrics:
+    - lag_seconds:
+        usage: "GAUGE"
+        description: "Replication lag behind primary in seconds (absent on primary)"
+    - lag_bytes:
+        usage: "GAUGE"
+        description: "Replication lag behind primary in bytes, receive_lsn - replay_lsn (absent on primary)"
+    - in_recovery:
+        usage: "GAUGE"
+        description: "1 if this server is in recovery (replica), 0 if primary"
+
+# Replication state: replication slots on the primary joined with the
+# primary's WAL sender view, in one block so dashboards can correlate
+# slot retention with sender lag for the same (slot_name, replica_server_ubid).
+# FULL OUTER JOIN keeps:
+#   - rows with a slot but no active sender (consumer disconnected; the
+#     load-bearing alert case for retained_bytes growing unbounded)
+#   - rows with an active sender but no slot (streaming-without-slot,
+#     rare but valid)
+#   - rows where both sides match (the typical case)
+# Sender-side metric columns are NULL on rows without a sender (and
+# vice versa for slot-side); postgres_exporter skips NULL gauges.
+pg_replication:
+  query: |
+    SELECT
+      COALESCE(rs.slot_name, '') AS slot_name,
+      COALESCE(rs.slot_type, '') AS slot_type,
+      CASE WHEN rs.slot_type = 'physical' THEN rs.slot_name ELSE '' END AS replica_server_ubid,
+      COALESCE(sr.application_name, '') AS application_name,
+      COALESCE(sr.client_addr::text, '') AS client_addr,
+      COALESCE(sr.state, '') AS state,
+      COALESCE(sr.sync_state, '') AS sync_state,
+      COALESCE(rs.active::int, 0) AS slot_active,
+      pg_wal_lsn_diff(c.current_lsn, rs.restart_lsn)         AS slot_retained_bytes,
+      pg_wal_lsn_diff(c.current_lsn, rs.confirmed_flush_lsn) AS slot_flush_lag_bytes,
+      pg_wal_lsn_diff(sr.sent_lsn, sr.write_lsn)  AS write_lag_bytes,
+      pg_wal_lsn_diff(sr.sent_lsn, sr.flush_lsn)  AS flush_lag_bytes,
+      pg_wal_lsn_diff(sr.sent_lsn, sr.replay_lsn) AS replay_lag_bytes,
+      EXTRACT(EPOCH FROM sr.write_lag)  AS write_lag_seconds,
+      EXTRACT(EPOCH FROM sr.flush_lag)  AS flush_lag_seconds,
+      EXTRACT(EPOCH FROM sr.replay_lag) AS replay_lag_seconds
+    FROM pg_replication_slots rs
+    FULL OUTER JOIN pg_stat_replication sr ON sr.pid = rs.active_pid
+    CROSS JOIN LATERAL (
+      SELECT CASE WHEN pg_is_in_recovery()
+                  THEN pg_last_wal_receive_lsn()
+                  ELSE pg_current_wal_lsn()
+             END AS current_lsn
+    ) c
+  master: true
+  metrics:
+    - slot_name:
+        usage: "LABEL"
+        description: "Name of the replication slot (empty for sender rows without a slot)"
+    - slot_type:
+        usage: "LABEL"
+        description: "Type of replication slot (physical or logical; empty if no slot)"
+    - replica_server_ubid:
+        usage: "LABEL"
+        description: "UBID of the replica server owning this slot (same as slot_name for physical slots, empty for logical slots and sender-only rows)"
+    - application_name:
+        usage: "LABEL"
+        description: "Application name of the connected standby (empty if slot has no active sender)"
+    - client_addr:
+        usage: "LABEL"
+        description: "IP address of the connected standby (empty if slot has no active sender)"
+    - state:
+        usage: "LABEL"
+        description: "WAL sender state (empty if slot has no active sender)"
+    - sync_state:
+        usage: "LABEL"
+        description: "Synchronous state (async, sync, potential, quorum; empty if slot has no active sender)"
+    - slot_active:
+        usage: "GAUGE"
+        description: "1 if the slot has an active consumer, 0 if defined but not consumed"
+    - slot_retained_bytes:
+        usage: "GAUGE"
+        description: "Bytes of WAL the primary must retain for this slot (current_lsn - restart_lsn); grows unbounded when the consumer is offline — the load-bearing slot-health alert"
+    - slot_flush_lag_bytes:
+        usage: "GAUGE"
+        description: "Bytes not yet flushed by the slot's consumer (current_lsn - confirmed_flush_lsn, logical slots only)"
+    - write_lag_bytes:
+        usage: "GAUGE"
+        description: "Bytes between sent_lsn and write_lsn for this sender (absent if slot has no active sender)"
+    - flush_lag_bytes:
+        usage: "GAUGE"
+        description: "Bytes between sent_lsn and flush_lsn for this sender (absent if slot has no active sender)"
+    - replay_lag_bytes:
+        usage: "GAUGE"
+        description: "Bytes between sent_lsn and replay_lsn for this sender (absent if slot has no active sender)"
+    - write_lag_seconds:
+        usage: "GAUGE"
+        description: "Time lag for standby to write received WAL (absent if standby has not yet reported feedback)"
+    - flush_lag_seconds:
+        usage: "GAUGE"
+        description: "Time lag for standby to flush received WAL (absent if standby has not yet reported feedback)"
+    - replay_lag_seconds:
+        usage: "GAUGE"
+        description: "Time lag for standby to replay received WAL (absent if standby has not yet reported feedback)"
+
+pg_extension:
+  query: |
+    SELECT
+      extname    AS extension_name,
+      extversion AS installed_version,
+      1 AS info
+    FROM pg_extension
+  master: true
+  metrics:
+    - extension_name:
+        usage: "LABEL"
+        description: "Name of the installed extension"
+    - installed_version:
+        usage: "LABEL"
+        description: "Currently installed version of the extension"
+    - info:
+        usage: "GAUGE"
+        description: "Always 1; absence of the metric for a given extension means it is not installed"
+
+# pg_stat_ch (per-query telemetry extension) queue + exporter stats.
+# On instances where the extension is not installed (non-standard flavors,
+# or a standard instance prior to CREATE EXTENSION running), this query
+# fails with "function pg_stat_ch_stats() does not exist". postgres_exporter
+# logs the per-query error and continues — the scrape itself still
+# succeeds and this metric is simply absent on those instances.
+#
+# The extension's column set has evolved across versions (e.g., dsa_oom_count
+# was added later). We read each column via to_jsonb(...) ->> 'col_name' so
+# that missing columns yield NULL (postgres_exporter skips NULL gauges)
+# rather than failing the entire query with a column-not-found error.
+pg_stat_ch:
+  query: |
+    SELECT
+      (s->>'enqueued_events')::float  AS enqueued_events,
+      (s->>'dropped_events')::float   AS dropped_events,
+      (s->>'exported_events')::float  AS exported_events,
+      (s->>'send_failures')::float    AS send_failures,
+      (s->>'queue_size')::float       AS queue_size,
+      (s->>'queue_capacity')::float   AS queue_capacity,
+      (s->>'queue_usage_pct')::float  AS queue_usage_pct,
+      (s->>'dsa_oom_count')::float    AS dsa_oom_count
+    FROM (SELECT to_jsonb(pg_stat_ch_stats()) AS s) j
+  master: true
+  metrics:
+    - enqueued_events:
+        usage: "COUNTER"
+        description: "Total events enqueued into the pg_stat_ch ring buffer"
+    - dropped_events:
+        usage: "COUNTER"
+        description: "Total events dropped by pg_stat_ch (queue full or backpressure)"
+    - exported_events:
+        usage: "COUNTER"
+        description: "Total events handed off by pg_stat_ch to the OTel/ClickHouse exporter"
+    - send_failures:
+        usage: "COUNTER"
+        description: "Total send failures from the pg_stat_ch exporter"
+    - queue_size:
+        usage: "GAUGE"
+        description: "Current number of events in the pg_stat_ch ring buffer"
+    - queue_capacity:
+        usage: "GAUGE"
+        description: "Capacity of the pg_stat_ch ring buffer"
+    - queue_usage_pct:
+        usage: "GAUGE"
+        description: "pg_stat_ch ring buffer usage as a percentage (0-100)"
+    - dsa_oom_count:
+        usage: "COUNTER"
+        description: "Total dynamic shared area out-of-memory events in pg_stat_ch"

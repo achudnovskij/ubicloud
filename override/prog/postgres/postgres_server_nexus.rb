@@ -2,6 +2,7 @@
 
 require "excon"
 require "jwt"
+require "yaml"
 
 class Prog::Postgres::PostgresServerNexus
   label :setup_otel_collector
@@ -388,6 +389,12 @@ EXPORTER
         Clog.emit("OTel token JWT decode failed", {otel_token_jwt_decode_error: {error: e.message}})
         true
       end
+    end
+
+    def postgres_exporter_queries_yaml
+      base = YAML.safe_load(super)
+      override = YAML.safe_load_file("override/config/postgres_exporter_queries.yml") || {}
+      YAML.dump(base.merge(override).compact)
     end
   end
 end
