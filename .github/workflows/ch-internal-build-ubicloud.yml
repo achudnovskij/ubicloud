@@ -35,6 +35,7 @@ jobs:
       context: .
       build-args: |
         SERVICE_VERSION=${{needs.generateVersion.outputs.VERSION_TAG}}
+        GIT_COMMIT_HASH=${{needs.generateVersion.outputs.VERSION_TAG}}
       depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
       push: ${{ github.actor != 'dependabot[bot]' }}
       prNumber: ${{ github.event.pull_request.number }}

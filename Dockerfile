@@ -46,7 +46,8 @@ COPY --chown=ubicloud . /app
 
 ENV RACK_ENV=production
 ENV PORT=3000
-
+ARG GIT_COMMIT_HASH
+ENV GIT_COMMIT_HASH=${GIT_COMMIT_HASH}
 EXPOSE 3000
 
 CMD ["foreman", "start"]
