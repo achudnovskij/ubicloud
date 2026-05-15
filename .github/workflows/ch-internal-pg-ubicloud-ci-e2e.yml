@@ -128,7 +128,7 @@ jobs:
               echo ""
               echo "=== List Postgres resources ==="
               PROJECT_ID=$(curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:3100/project | jq -r ".items[0].id")
-              curl -sf -H "Authorization: Bearer $TOKEN" "http://localhost:3100/project/${PROJECT_ID}/location/aws-us-west-2/postgres" | jq .
+              curl -sf -H "Authorization: Bearer $TOKEN" "http://localhost:3100/project/${PROJECT_ID}/location/us-west-2-cell-0/postgres" | jq .
             ' 2>&1
 
       - name: Create logs directory
@@ -143,7 +143,7 @@ jobs:
         with:
           name: Smoke test
           entrypoint: /app/pg_ubi_provision_smoke
-          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"aws-us-west-2","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}'
+          plugin_config: '{"api_base_url":"http://api.localhost:3100","api_token":"${{ steps.prepare.outputs.pat_token }}","project_id":"${{ steps.prepare.outputs.project_ubid }}","location":"us-west-2-cell-0","server_size":"m8gd.large","target_size":"m8gd.xlarge","storage_size":118,"target_storage_size":237}'
           image: ${{ env.STRESSHOUSE_IMAGE }}
           network: devcontainer_ubicloud
           api_host: ${{ steps.app_ip.outputs.ip }}
@@ -159,7 +159,7 @@ jobs:
           LOG_DIR: /tmp/ci-logs
         run: |
           set -u
-          BASE='"api_base_url":"http://api.localhost:3100","api_token":"'"$PAT_TOKEN"'","project_id":"'"$PROJECT_UBID"'","location":"aws-us-west-2"'
+          BASE='"api_base_url":"http://api.localhost:3100","api_token":"'"$PAT_TOKEN"'","project_id":"'"$PROJECT_UBID"'","location":"us-west-2-cell-0"'
 
           NAMES=()
           PIDS=()
@@ -324,7 +324,7 @@ jobs:
 
               echo "=== Deleting all Postgres resources ==="
               NAMES=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-                "$API/project/${PROJECT_ID}/location/aws-us-west-2/postgres" \
+                "$API/project/${PROJECT_ID}/location/us-west-2-cell-0/postgres" \
                 | jq -r ".items[]?.name // empty")
 
               if [ -z "$NAMES" ]; then
@@ -336,12 +336,12 @@ jobs:
                 echo "Deleting: $name"
                 curl -sf -X DELETE \
                   -H "Authorization: Bearer $TOKEN" \
-                  "$API/project/${PROJECT_ID}/location/aws-us-west-2/postgres/${name}" || true
+                  "$API/project/${PROJECT_ID}/location/us-west-2-cell-0/postgres/${name}" || true
               done
               echo "Waiting for Ubicloud to finish teardown..."
               for i in $(seq 1 60); do
                 REMAINING=$(curl -sf -H "Authorization: Bearer $TOKEN" \
-                  "$API/project/${PROJECT_ID}/location/aws-us-west-2/postgres" \
+                  "$API/project/${PROJECT_ID}/location/us-west-2-cell-0/postgres" \
                   | jq -r ".items[]?.name // empty")
                 if [ -z "$REMAINING" ]; then
                   echo "All resources deleted"
