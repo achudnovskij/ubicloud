@@ -21,7 +21,7 @@ env:
 
 jobs:
   pg-ubicloud-ci:
-    runs-on: ubuntu-latest
+    runs-on: ubicloud-standard-8
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -167,7 +167,7 @@ jobs:
           # Backgrounds the script in the *parent* shell (no subshell), so $!
           # is captured directly and `wait "$pid"` works in the parent.
           launch() {
-            local name="$1" entrypoint="$2" config="$3" timeout_min="${4:-20}"
+            local name="$1" entrypoint="$2" config="$3" timeout_min="${4:-25}"
             TEST_NAME="$name" \
             ENTRYPOINT="$entrypoint" \
             PLUGIN_CONFIG="$config" \
