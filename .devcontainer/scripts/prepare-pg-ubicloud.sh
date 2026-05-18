@@ -32,10 +32,15 @@ if [ ${#REGIONS[@]} -eq 0 ]; then
   REGIONS=("us-west-2")
 fi
 
-# 1. Create default project with private_locations enabled
+# 1. Run database migrations to latest version
+echo ""
+echo "=== Running database migrations (rake dev_up) ==="
+(cd "$SCRIPT_DIR/../.." && bundle exec rake dev_up)
+
+# 2. Create default project with private_locations enabled
 "$SCRIPT_DIR/register-pg-project.sh"
 
-# 2. GitHub authentication
+# 3. GitHub authentication
 echo ""
 echo "=== GitHub CLI authentication ==="
 if [ -n "${GH_TOKEN:-}" ]; then
@@ -44,7 +49,7 @@ else
   gh auth status 2>/dev/null || gh auth login
 fi
 
-# 3. Download AWS config (skip when credentials are already in environment)
+# 4. Download AWS config (skip when credentials are already in environment)
 if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
   echo ""
   echo "=== AWS credentials available in environment — skipping ~/.aws/config download ==="
@@ -58,7 +63,7 @@ else
   echo "AWS config written to ~/.aws/config"
 fi
 
-# 4. Register regions (create locations + fetch and update AMIs)
+# 5. Register regions (create locations + fetch and update AMIs)
 for REGION in "${REGIONS[@]}"; do
   "$SCRIPT_DIR/register-pg-region.sh" "$REGION" "$AWS_ASSUME_ROLE"
 done
