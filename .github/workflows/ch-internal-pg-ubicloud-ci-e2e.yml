@@ -21,7 +21,7 @@ env:
 
 jobs:
   pg-ubicloud-ci:
-    runs-on: ubicloud-standard-8
+    runs-on: k8s-large
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
