@@ -1,5 +1,6 @@
 $(function () {
   setupAutoRefresh();
+  setupScrollToBottom();
   setupDatePicker();
   setupFormOptionUpdates();
   setupPlayground();
@@ -137,6 +138,12 @@ function setupAutoRefresh() {
   });
 }
 
+function setupScrollToBottom() {
+  $("[data-scroll-to-bottom]").each(function () {
+    this.scrollTop = this.scrollHeight;
+  });
+}
+
 function setupDatePicker() {
   if (!$.prototype.flatpickr) { return; }
 
@@ -165,6 +172,9 @@ function setupDatePicker() {
     }
     if ($(this).data("defaultdate")) {
       options.defaultDate = $(this).data("defaultdate");
+    }
+    if ($(this).data("dateformat")) {
+      options.dateFormat = $(this).data("dateformat");
     }
 
     $(this).flatpickr(options);

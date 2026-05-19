@@ -8,8 +8,9 @@ RSpec.describe OtelLogConfig do
   let(:server_role) { "primary" }
   let(:log_dir) { "/dat/17/data/pg_log" }
   let(:resource_name) { "my-pg-db" }
+  let(:resource_id) { "pg9x8y7z6w" }
   let(:log_destinations) { [] }
-  let(:config) { described_class.new(instance: instance, server_role: server_role, log_dir: log_dir, resource_name: resource_name, log_destinations: log_destinations) }
+  let(:config) { described_class.new(instance: instance, server_role: server_role, log_dir: log_dir, resource_name: resource_name, resource_id: resource_id, log_destinations: log_destinations) }
   let(:parsed) { YAML.safe_load(config.to_config, aliases: true) }
 
   describe "#to_config" do
@@ -38,6 +39,33 @@ RSpec.describe OtelLogConfig do
       expect(pglog_ops).to include(include("type" => "remove", "field" => "attributes.error_severity"))
     end
 
+    it "retains only the expected fields in the pglog receiver" do
+      retain_op = parsed["receivers"]["filelog/pglog"]["operators"].find { |op| op["type"] == "retain" }
+      expect(retain_op["fields"]).to include(
+        "body", "attributes.message",
+        "attributes.stream", "attributes.instance", "attributes.server_role", "attributes.hostname",
+        "attributes.resource_name", "attributes.resource_id",
+        "attributes.pid", "attributes.dbname", "attributes.user",
+        "attributes.app_name", "attributes.remote_host", "attributes.remote_host_port",
+      )
+    end
+
+    it "maps pglog severity levels without using non-standard info3" do
+      severity_op = parsed["receivers"]["filelog/pglog"]["operators"].find { |op| op["type"] == "regex_parser" }
+      mapping = severity_op["severity"]["mapping"]
+      expect(mapping).not_to have_key("info3")
+      expect(mapping["info"]).to include("NOTICE", "INFO", "LOG", "DETAIL", "HINT")
+      expect(mapping["warn"]).to eq("WARNING")
+      expect(mapping["fatal"]).to include("FATAL", "PANIC")
+    end
+
+    it "maps journald severity levels without using non-standard info3" do
+      severity_op = parsed["receivers"]["journald"]["operators"].find { |op| op["type"] == "severity_parser" }
+      mapping = severity_op["mapping"]
+      expect(mapping).not_to have_key("info3")
+      expect(Array(mapping["info"])).to include("5", "6")
+    end
+
     it "falls back to copying body into attributes.message when the regex did not match" do
       pglog_ops = parsed["receivers"]["filelog/pglog"]["operators"]
       fallback_idx = pglog_ops.index { |op| op["type"] == "copy" && op["from"] == "body" && op["to"] == "attributes.message" }
@@ -49,6 +77,20 @@ RSpec.describe OtelLogConfig do
 
     it "configures the journald receiver" do
       expect(parsed["receivers"]).to have_key("journald")
+    end
+
+    it "parses journald realtime timestamp into the log timestamp" do
+      time_parser = parsed["receivers"]["journald"]["operators"].find { |op| op["id"] == "parse_journal_timestamp" }
+      expect(time_parser).to include(
+        "type" => "time_parser",
+        "parse_from" => 'body["__REALTIME_TIMESTAMP"]',
+        "layout_type" => "epoch",
+        "layout" => "us",
+        "on_error" => "send_quiet",
+      )
+      filter_idx = parsed["receivers"]["journald"]["operators"].index { |op| op["id"] == "filter_units" }
+      time_parser_idx = parsed["receivers"]["journald"]["operators"].index(time_parser)
+      expect(time_parser_idx).to be < filter_idx
     end
 
     it "filters journal to postgres-related units" do
@@ -124,6 +166,11 @@ RSpec.describe OtelLogConfig do
         expect(parsed["processors"]).to have_key("transform/dest0")
       end
 
+      it "does not stamp syslog records with a UUIDv7 log_id" do
+        statements = parsed["processors"]["transform/dest0"]["log_statements"].flat_map { |s| s["statements"] }
+        expect(statements).not_to include(a_string_including("UUIDv7"))
+      end
+
       it "includes proc_id, appname, priority and message formatting statements" do
         statements = parsed["processors"]["transform/dest0"]["log_statements"].flat_map { |s| s["statements"] }
         expect(statements).to include(a_string_including('log.attributes["proc_id"]'))
@@ -142,11 +189,7 @@ RSpec.describe OtelLogConfig do
 
       it "includes the transform processor in the pipeline" do
         pglog = parsed["service"]["pipelines"]["logs/pglog/dest0"]
-        expect(pglog["processors"]).to eq(["memory_limiter", "transform/dest0", "batch"])
-      end
-
-      it "does not create a transform/enrich processor" do
-        expect(parsed["processors"]).not_to have_key("transform/enrich")
+        expect(pglog["processors"]).to eq(["memory_limiter", "transform/timestamp_fallback", "transform/dest0", "batch"])
       end
     end
 
@@ -171,7 +214,7 @@ RSpec.describe OtelLogConfig do
 
       it "includes the transform processor in the pipeline" do
         pglog = parsed["service"]["pipelines"]["logs/pglog/dest0"]
-        expect(pglog["processors"]).to eq(["memory_limiter", "transform/dest0", "batch"])
+        expect(pglog["processors"]).to eq(["memory_limiter", "transform/timestamp_fallback", "transform/dest0", "batch"])
       end
     end
 
@@ -201,6 +244,14 @@ RSpec.describe OtelLogConfig do
         expect(exporter).not_to have_key("headers")
       end
 
+      it "omits encoding when not specified" do
+        expect(parsed["exporters"]["otlp_http/dest0"]).not_to have_key("encoding")
+      end
+
+      it "omits tls when no ca_bundle is provided" do
+        expect(parsed["exporters"]["otlp_http/dest0"]).not_to have_key("tls")
+      end
+
       it "configures retry_on_failure for the otlp exporter" do
         retry_cfg = parsed["exporters"]["otlp_http/dest0"]["retry_on_failure"]
         expect(retry_cfg).to include("enabled" => true, "initial_interval" => "5s", "max_interval" => "30s")
@@ -216,13 +267,14 @@ RSpec.describe OtelLogConfig do
         expect(parsed["service"]["pipelines"]).to have_key("logs/journal/dest0")
       end
 
-      it "includes only the batch processor in the pipeline" do
-        pglog = parsed["service"]["pipelines"]["logs/pglog/dest0"]
-        expect(pglog["processors"]).to eq(["memory_limiter", "batch"])
+      it "stamps every otlp record with a UUIDv7 log_id" do
+        statements = parsed["processors"]["transform/dest0"]["log_statements"].flat_map { |s| s["statements"] }
+        expect(statements).to eq(['set(log.attributes["log_id"], UUIDv7())'])
       end
 
-      it "does not create a transform processor" do
-        expect(parsed["processors"].keys).not_to include(a_string_starting_with("transform/"))
+      it "includes the transform processor in the pipeline" do
+        pglog = parsed["service"]["pipelines"]["logs/pglog/dest0"]
+        expect(pglog["processors"]).to eq(["memory_limiter", "transform/timestamp_fallback", "transform/dest0", "batch"])
       end
     end
 
@@ -234,6 +286,45 @@ RSpec.describe OtelLogConfig do
       it "includes the headers in the exporter config" do
         exporter = parsed["exporters"]["otlp_http/dest0"]
         expect(exporter["headers"]).to eq({"api-key" => "secret", "X-Custom" => "val"})
+      end
+    end
+
+    context "with an otlp destination that sets encoding and ca_bundle" do
+      let(:log_destinations) do
+        [{
+          "type" => "otlp",
+          "url" => "https://parseable.example.com",
+          "options" => {
+            "encoding" => "json",
+            "ca_bundle" => "-----BEGIN CERTIFICATE-----\n...",
+            "headers" => {"X-P-Stream" => "pg9x8y7z6w", "X-P-Log-Source" => "otel-logs", "Authorization" => "Basic abc"},
+          },
+        }]
+      end
+
+      it "sets encoding on the exporter" do
+        expect(parsed["exporters"]["otlp_http/dest0"]["encoding"]).to eq("json")
+      end
+
+      it "points tls.ca_file at the per-destination CA path" do
+        expect(parsed["exporters"]["otlp_http/dest0"]["tls"]["ca_file"]).to eq(described_class.dest_ca_file_path(0))
+      end
+
+      it "does not use insecure_skip_verify" do
+        expect(parsed["exporters"]["otlp_http/dest0"]["tls"]).not_to have_key("insecure_skip_verify")
+      end
+
+      it "passes through arbitrary headers (including Authorization)" do
+        expect(parsed["exporters"]["otlp_http/dest0"]["headers"]).to include("Authorization" => "Basic abc", "X-P-Stream" => "pg9x8y7z6w", "X-P-Log-Source" => "otel-logs")
+      end
+
+      it "still stamps records with UUIDv7" do
+        statements = parsed["processors"]["transform/dest0"]["log_statements"].flat_map { |s| s["statements"] }
+        expect(statements).to eq(['set(log.attributes["log_id"], UUIDv7())'])
+      end
+
+      it "does not create a basicauth extension" do
+        expect(parsed["extensions"].keys).not_to include(a_string_starting_with("basicauth"))
       end
     end
 
@@ -279,8 +370,11 @@ RSpec.describe OtelLogConfig do
         expect(parsed["exporters"]).to have_key("otlp_http/dest1")
       end
 
-      it "does not create any transform processors for otlp destinations" do
-        expect(parsed["processors"].keys).not_to include(a_string_starting_with("transform/"))
+      it "creates a UUIDv7 transform for each otlp destination" do
+        ["transform/dest0", "transform/dest1"].each do |k|
+          statements = parsed["processors"][k]["log_statements"].flat_map { |s| s["statements"] }
+          expect(statements).to eq(['set(log.attributes["log_id"], UUIDv7())'])
+        end
       end
     end
 
@@ -300,16 +394,14 @@ RSpec.describe OtelLogConfig do
         expect(parsed["exporters"]).to have_key("syslog/dest1")
       end
 
-      it "uses only batch for the otlp pipeline" do
-        pglog = parsed["service"]["pipelines"]["logs/pglog/dest0"]
-        expect(pglog["processors"]).to eq(["memory_limiter", "batch"])
-        expect(pglog["exporters"]).to eq(["otlp_http/dest0"])
-      end
+      it "uses the per-destination transform for both pipelines" do
+        pglog0 = parsed["service"]["pipelines"]["logs/pglog/dest0"]
+        expect(pglog0["processors"]).to eq(["memory_limiter", "transform/timestamp_fallback", "transform/dest0", "batch"])
+        expect(pglog0["exporters"]).to eq(["otlp_http/dest0"])
 
-      it "uses transform/dest1 for the syslog pipeline" do
-        pglog = parsed["service"]["pipelines"]["logs/pglog/dest1"]
-        expect(pglog["processors"]).to eq(["memory_limiter", "transform/dest1", "batch"])
-        expect(pglog["exporters"]).to eq(["syslog/dest1"])
+        pglog1 = parsed["service"]["pipelines"]["logs/pglog/dest1"]
+        expect(pglog1["processors"]).to eq(["memory_limiter", "transform/timestamp_fallback", "transform/dest1", "batch"])
+        expect(pglog1["exporters"]).to eq(["syslog/dest1"])
       end
     end
   end

@@ -158,6 +158,12 @@ module Config
   optional :minio_service_project_id, uuid
   override :minio_version, "minio_20250723155402.0.0_amd64", string
 
+  # Parseable
+  optional :parseable_service_project_id, uuid
+  override :parseable_host_name, "logs.ubicloud.com", string
+  override :parseable_version, "v2.6.5", string
+  optional :parseable_endpoint_override, string
+
   # VictoriaMetrics
   optional :victoria_metrics_service_project_id, uuid
   override :victoria_metrics_host_name, "metrics.ubicloud.com", string
@@ -220,10 +226,10 @@ module Config
   optional :ubicloud_images_r2_access_key, string, clear: true
   optional :ubicloud_images_r2_secret_key, string, clear: true
 
-  override :github_ubuntu_2204_x64_aws_ami_version, "ami-08855bdd06e27855c", string
-  override :github_ubuntu_2404_x64_aws_ami_version, "ami-086d34c41ddb969fa", string
-  override :github_ubuntu_2204_arm64_aws_ami_version, "ami-08781e52ef55da0ae", string
-  override :github_ubuntu_2404_arm64_aws_ami_version, "ami-0d90f4c3402fceb4b", string
+  override :github_ubuntu_2204_x64_aws_ami_version, "ami-03a534f7fa3ae9887", string
+  override :github_ubuntu_2404_x64_aws_ami_version, "ami-092dab75acd086240", string
+  override :github_ubuntu_2204_arm64_aws_ami_version, "ami-02d3ba0a683f05899", string
+  override :github_ubuntu_2404_arm64_aws_ami_version, "ami-08b8e7b576e356f54", string
   override :postgres_gce_image_gcp_project_id, "ubicloud-images", string
 
   # Allocator

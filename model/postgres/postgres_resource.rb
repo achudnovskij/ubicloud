@@ -21,7 +21,7 @@ class PostgresResource < Sequel::Model
   dataset_module Pagination
 
   plugin ResourceMethods, redacted_columns: [:root_cert_1, :root_cert_2, :server_cert, :trusted_ca_certs, :client_root_cert_1, :client_root_cert_2, :client_cert],
-    encrypted_columns: [:superuser_password, :root_cert_key_1, :root_cert_key_2, :server_cert_key, :client_root_cert_key_1, :client_root_cert_key_2, :client_cert_key]
+    encrypted_columns: [:superuser_password, :root_cert_key_1, :root_cert_key_2, :server_cert_key, :client_root_cert_key_1, :client_root_cert_key_2, :client_cert_key, :parseable_password]
   plugin ProviderDispatcher, __FILE__
   plugin SemaphoreMethods, :initial_provisioning, :refresh_dns_record, :update_billing_records,
     :destroy, :refresh_certificates, :use_different_az, :use_old_walg_command, :check_disk_usage,
@@ -551,6 +551,17 @@ class PostgresResource < Sequel::Model
     options.serialize
   end
 
+  def setup_log_aggregation
+    # Setup only needs to happen if there's a Parseable resource present in the
+    # PG service project.
+    return unless (client = ParseableResource.client_for_project(Config.postgres_service_project_id))
+
+    client.create_stream(stream_name: ubid)
+    client.create_role(role_name: ubid, privileges: [{privilege: "ingestor", resource: {stream: ubid}}])
+    password = client.create_user(user_id: ubid, roles: [ubid])
+    update(parseable_password: password)
+  end
+
   def self.postgres_flavors(project)
     Option::POSTGRES_FLAVOR_OPTIONS.reject { |k,| (k == Flavor::LANTERN && !project.get_ff_postgres_lantern) || (k == Flavor::PARADEDB && !project.get_ff_postgres_paradedb) }
   end
@@ -692,6 +703,7 @@ end
 #  client_root_cert_key_2      | text                     |
 #  client_cert                 | text                     |
 #  client_cert_key             | text                     |
+#  parseable_password          | text                     |
 # Indexes:
 #  postgres_server_pkey                               | PRIMARY KEY btree (id)
 #  postgres_resource_project_id_location_id_name_uidx | UNIQUE btree (project_id, location_id, name)

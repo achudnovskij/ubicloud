@@ -109,7 +109,11 @@ end
 #  machine_image             | machine_image_location_id_fkey             | (location_id) REFERENCES location(id)
 #  machine_image_store       | machine_image_store_location_id_fkey       | (location_id) REFERENCES location(id)
 #  minio_cluster             | minio_cluster_location_id_fkey             | (location_id) REFERENCES location(id)
+<<<<<<< HEAD
 #  otel_otlp_destination     | otel_otlp_destination_id_fkey              | (id) REFERENCES location(id) ON DELETE CASCADE
+=======
+#  parseable_resource        | parseable_resource_location_id_fkey        | (location_id) REFERENCES location(id)
+>>>>>>> d487885a8d60dec682ae43b01abf48ae1b94850e
 #  postgres_resource         | postgres_resource_location_id_fkey         | (location_id) REFERENCES location(id)
 #  postgres_timeline         | postgres_timeline_location_id_fkey         | (location_id) REFERENCES location(id)
 #  private_subnet            | private_subnet_location_id_fkey            | (location_id) REFERENCES location(id)
