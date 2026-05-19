@@ -4,11 +4,13 @@ require "yaml"
 require "uri"
 
 # Generates OpenTelemetry Collector YAML configuration for shipping PostgreSQL
-# logs to user-configured destinations.
+# logs to one or more destinations.
 #
 # Supports two destination types:
-#   otlp   — OTLP HTTP endpoint (https://...), authenticated via HTTP headers
-#   syslog — RFC 5424 over TLS (tcp://host:port), authenticated via structured data
+#   otlp   — OTLP HTTP endpoint (https://...). Optional per-destination headers,
+#            TLS CA bundle, and encoding (e.g. "json"). Every record is stamped
+#            with a sortable UUIDv7 in attributes["log_id"].
+#   syslog — RFC 5424 over TLS (tcp://host:port), authenticated via structured data.
 #
 # Produces a unified log schema across two sources:
 #   filelog/pglog  — PostgreSQL stderr log files (parsed via log_line_prefix regex) → stream: "postgres"
@@ -32,11 +34,30 @@ require "uri"
 #   PROC-ID  = process id  (attributes["proc_id"])
 #   MSG      = message text  (attributes["message"])
 class OtelLogConfig
-  def initialize(instance:, server_role:, log_dir:, resource_name:, log_destinations:)
+  def self.dest_ca_file_path(i)
+    "/etc/otelcol-contrib/dest#{i}-ca.crt"
+  end
+  PGLOG_SEVERITY_MAPPING = {
+    "fatal" => ["FATAL", "PANIC"],
+    "error" => "ERROR",
+    "warn" => "WARNING",
+    "info" => ["NOTICE", "INFO", "LOG", "DETAIL", "HINT", "QUERY", "CONTEXT", "LOCATION", "STATEMENT"],
+    "debug" => ["DEBUG", "DEBUG1", "DEBUG2", "DEBUG3", "DEBUG4", "DEBUG5"],
+  }.freeze.each_value(&:freeze)
+  JOURNALD_SEVERITY_MAPPING = {
+    "fatal" => ["0", "1", "2"],
+    "error" => "3",
+    "warn" => "4",
+    "info" => ["5", "6"],
+    "debug" => "7",
+  }.freeze.each_value(&:freeze)
+
+  def initialize(instance:, server_role:, log_dir:, resource_name:, resource_id:, log_destinations:)
     @instance = instance
     @server_role = server_role
     @log_dir = log_dir
     @resource_name = resource_name
+    @resource_id = resource_id
     @log_destinations = log_destinations
   end
 
@@ -90,23 +111,19 @@ class OtelLogConfig
           "type" => "regex_parser",
           "regex" => '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \w+) \[(?P<pid>\d+):\d+\] \([^,]*,[^)]*\): host=(?P<remote_host_port>[^,]*),db=(?P<dbname>[^,]*),user=(?P<user>[^,]*),app=(?P<app_name>.*?),client=(?P<remote_host>\S*) (?P<error_severity>[A-Z0-9]+):\s+(?P<message>.*)',
           "on_error" => "send_quiet",
-          "timestamp" => {
-            "parse_from" => "attributes.timestamp",
-            "layout" => "2006-01-02 15:04:05.000 MST",
-            "layout_type" => "gotime",
-          },
           "severity" => {
             "parse_from" => "attributes.error_severity",
             "preset" => "none",
-            "mapping" => {
-              "fatal" => ["FATAL", "PANIC"],
-              "error" => "ERROR",
-              "warn" => "WARNING",
-              "info3" => "NOTICE",
-              "info" => ["INFO", "LOG"],
-              "debug" => ["DEBUG", "DEBUG1", "DEBUG2", "DEBUG3", "DEBUG4", "DEBUG5"],
-            },
+            "mapping" => PGLOG_SEVERITY_MAPPING,
           },
+        },
+        {
+          "type" => "time_parser",
+          "parse_from" => "attributes.timestamp",
+          "layout" => "2006-01-02 15:04:05.000 MST",
+          "layout_type" => "gotime",
+          "if" => "attributes.timestamp != nil",
+          "on_error" => "send_quiet",
         },
         {"type" => "copy", "from" => "body", "to" => "attributes.message", "if" => "attributes.message == nil"},
         {"type" => "copy", "from" => "attributes.message", "to" => "body"},
@@ -115,7 +132,28 @@ class OtelLogConfig
         {"type" => "add", "field" => "attributes.instance", "value" => @instance},
         {"type" => "add", "field" => "attributes.server_role", "value" => @server_role},
         {"type" => "add", "field" => "attributes.hostname", "value" => @instance},
+        {"type" => "add", "field" => "attributes.resource_name", "value" => @resource_name},
+        {"type" => "add", "field" => "attributes.resource_id", "value" => @resource_id},
         {"type" => "remove", "field" => "attributes.timestamp", "if" => "attributes.timestamp != nil"},
+        {
+          "type" => "retain",
+          "fields" => [
+            "body",
+            "attributes.message",
+            "attributes.stream",
+            "attributes.instance",
+            "attributes.server_role",
+            "attributes.hostname",
+            "attributes.resource_name",
+            "attributes.resource_id",
+            "attributes.pid",
+            "attributes.dbname",
+            "attributes.user",
+            "attributes.app_name",
+            "attributes.remote_host",
+            "attributes.remote_host_port",
+          ],
+        },
       ],
     }
   end
@@ -124,6 +162,14 @@ class OtelLogConfig
     {
       "storage" => "file_storage/state",
       "operators" => [
+        {
+          "id" => "parse_journal_timestamp",
+          "type" => "time_parser",
+          "parse_from" => 'body["__REALTIME_TIMESTAMP"]',
+          "layout_type" => "epoch",
+          "layout" => "us",
+          "on_error" => "send_quiet",
+        },
         {
           "id" => "filter_units",
           "type" => "router",
@@ -139,6 +185,8 @@ class OtelLogConfig
         {"id" => "set_common_fields", "type" => "add", "field" => "attributes.instance", "value" => @instance},
         {"type" => "add", "field" => "attributes.server_role", "value" => @server_role},
         {"type" => "add", "field" => "attributes.hostname", "value" => @instance},
+        {"type" => "add", "field" => "attributes.resource_name", "value" => @resource_name},
+        {"type" => "add", "field" => "attributes.resource_id", "value" => @resource_id},
         {"type" => "move", "from" => "body", "to" => "attributes.journald"},
         {"type" => "copy", "from" => 'attributes.journald["MESSAGE"]', "to" => "attributes.message"},
         {"type" => "move", "from" => 'attributes.journald["MESSAGE"]', "to" => "body"},
@@ -148,14 +196,7 @@ class OtelLogConfig
           "type" => "severity_parser",
           "parse_from" => 'attributes["PRIORITY"]',
           "preset" => "none",
-          "mapping" => {
-            "fatal" => ["0", "1", "2"],
-            "error" => "3",
-            "warn" => "4",
-            "info3" => "5",
-            "info" => "6",
-            "debug" => "7",
-          },
+          "mapping" => JOURNALD_SEVERITY_MAPPING,
         },
         {
           "type" => "retain",
@@ -166,6 +207,8 @@ class OtelLogConfig
             "attributes.instance",
             "attributes.server_role",
             "attributes.hostname",
+            "attributes.resource_name",
+            "attributes.resource_id",
             "attributes.pid",
           ],
         },
@@ -183,24 +226,21 @@ class OtelLogConfig
       "batch" => nil,
     }
 
+    unless @log_destinations.empty?
+      hash["transform/timestamp_fallback"] = {
+        "log_statements" => [{
+          "context" => "log",
+          "statements" => ["set(log.time, log.observed_time) where log.time_unix_nano == 0"],
+        }],
+      }
+    end
+
     @log_destinations.each_with_index do |dest, i|
-      next unless dest["type"] == "syslog"
-      statements = [
-        "set(log.attributes[\"proc_id\"], log.attributes[\"pid\"]) where log.attributes[\"pid\"] != nil",
-        "set(log.attributes[\"appname\"], Concat([\"#{ottl_escape(@resource_name)}-\", log.attributes[\"stream\"]], \"\"))",
-        "set(log.attributes[\"priority\"], 135) where log.severity_number >= 1",
-        "set(log.attributes[\"priority\"], 134) where log.severity_number >= 9",
-        "set(log.attributes[\"priority\"], 133) where log.severity_number >= 11",
-        "set(log.attributes[\"priority\"], 132) where log.severity_number >= 13",
-        "set(log.attributes[\"priority\"], 131) where log.severity_number >= 17",
-        "set(log.attributes[\"priority\"], 130) where log.severity_number >= 21",
-        "set(log.attributes[\"message\"], Concat([\"host=\", log.attributes[\"remote_host_port\"], \",db=\", log.attributes[\"dbname\"], \",user=\", log.attributes[\"user\"], \",app=\", log.attributes[\"app_name\"], \",client=\", log.attributes[\"remote_host\"], \" \", log.attributes[\"message\"]], \"\")) where log.attributes[\"dbname\"] != nil",
-        "set(log.attributes[\"message\"], Concat([log.severity_text, \":  \", log.attributes[\"message\"]], \"\")) where IsMatch(log.severity_text, \"^[A-Z]\")",
-      ]
-      ((dest["options"] || {})["structured_data"] || {}).each do |sd_id, params|
-        params.each do |key, value|
-          statements << "set(log.attributes[\"structured_data\"][\"#{ottl_escape(sd_id)}\"][\"#{ottl_escape(key)}\"], \"#{ottl_escape(value)}\")"
-        end
+      statements = case dest["type"]
+      when "otlp"
+        ['set(log.attributes["log_id"], UUIDv7())']
+      when "syslog"
+        syslog_transform_statements(dest)
       end
       hash["transform/dest#{i}"] = {
         "log_statements" => [{"context" => "log", "statements" => statements}],
@@ -210,13 +250,35 @@ class OtelLogConfig
     hash
   end
 
+  def syslog_transform_statements(dest)
+    statements = [
+      "set(log.attributes[\"proc_id\"], log.attributes[\"pid\"]) where log.attributes[\"pid\"] != nil",
+      "set(log.attributes[\"appname\"], Concat([\"#{ottl_escape(@resource_name)}-\", log.attributes[\"stream\"]], \"\"))",
+      "set(log.attributes[\"priority\"], 135) where log.severity_number >= 1",
+      "set(log.attributes[\"priority\"], 134) where log.severity_number >= 9",
+      "set(log.attributes[\"priority\"], 133) where log.severity_number >= 11",
+      "set(log.attributes[\"priority\"], 132) where log.severity_number >= 13",
+      "set(log.attributes[\"priority\"], 131) where log.severity_number >= 17",
+      "set(log.attributes[\"priority\"], 130) where log.severity_number >= 21",
+      "set(log.attributes[\"message\"], Concat([\"host=\", log.attributes[\"remote_host_port\"], \",db=\", log.attributes[\"dbname\"], \",user=\", log.attributes[\"user\"], \",app=\", log.attributes[\"app_name\"], \",client=\", log.attributes[\"remote_host\"], \" \", log.attributes[\"message\"]], \"\")) where log.attributes[\"dbname\"] != nil",
+      "set(log.attributes[\"message\"], Concat([log.severity_text, \":  \", log.attributes[\"message\"]], \"\")) where IsMatch(log.severity_text, \"^[A-Z]\")",
+    ]
+    ((dest["options"] || {})["structured_data"] || {}).each do |sd_id, params|
+      params.each do |key, value|
+        statements << "set(log.attributes[\"structured_data\"][\"#{ottl_escape(sd_id)}\"][\"#{ottl_escape(key)}\"], \"#{ottl_escape(value)}\")"
+      end
+    end
+    statements
+  end
+
   def exporters_hash
-    return {"nop" => nil} if @log_destinations.empty?
-    @log_destinations.each_with_index.to_h do |dest, i|
+    hash = {}
+
+    @log_destinations.each_with_index do |dest, i|
       if dest["type"] == "otlp"
-        ["otlp_http/dest#{i}", {
+        opts = dest["options"] || {}
+        cfg = {
           "endpoint" => dest["url"],
-          "headers" => (dest["options"] || {})["headers"],
           "retry_on_failure" => {
             "enabled" => true,
             "initial_interval" => "5s",
@@ -227,18 +289,25 @@ class OtelLogConfig
             "storage" => "file_storage/state",
             "queue_size" => 1000,
           },
-        }.compact]
+        }
+        cfg["headers"] = opts["headers"] if opts["headers"]
+        cfg["encoding"] = opts["encoding"] if opts["encoding"]
+        cfg["tls"] = {"ca_file" => self.class.dest_ca_file_path(i)} if opts["ca_bundle"]
+        hash["otlp_http/dest#{i}"] = cfg
       else
         uri = URI.parse(dest["url"])
-        ["syslog/dest#{i}", {
+        hash["syslog/dest#{i}"] = {
           "endpoint" => uri.host,
           "port" => uri.port,
           "network" => "tcp",
           "protocol" => "rfc5424",
           "tls" => {"insecure" => false},
-        }]
+        }
       end
     end
+
+    hash["nop"] = nil if hash.empty?
+    hash
   end
 
   def service_hash
@@ -262,19 +331,15 @@ class OtelLogConfig
         "logs/journal/noop" => {"receivers" => ["journald"], "processors" => ["memory_limiter", "batch"], "exporters" => ["nop"]},
       }
     end
-    @log_destinations.each_with_index.flat_map do |dest, i|
-      if dest["type"] == "otlp"
-        processors = ["memory_limiter", "batch"]
-        exporter = "otlp_http/dest#{i}"
-      else
-        processors = ["memory_limiter", "transform/dest#{i}", "batch"]
-        exporter = "syslog/dest#{i}"
-      end
-      [
-        ["logs/pglog/dest#{i}", {"receivers" => ["filelog/pglog"], "processors" => processors, "exporters" => [exporter]}],
-        ["logs/journal/dest#{i}", {"receivers" => ["journald"], "processors" => processors, "exporters" => [exporter]}],
-      ]
-    end.to_h
+
+    pipelines = {}
+    @log_destinations.each_with_index do |dest, i|
+      exporter = (dest["type"] == "otlp") ? "otlp_http/dest#{i}" : "syslog/dest#{i}"
+      processors = ["memory_limiter", "transform/timestamp_fallback", "transform/dest#{i}", "batch"]
+      pipelines["logs/pglog/dest#{i}"] = {"receivers" => ["filelog/pglog"], "processors" => processors, "exporters" => [exporter]}
+      pipelines["logs/journal/dest#{i}"] = {"receivers" => ["journald"], "processors" => processors, "exporters" => [exporter]}
+    end
+    pipelines
   end
 
   def ottl_escape(value)

@@ -371,33 +371,49 @@ RSpec.describe Clover, "github" do
       expect(page).to have_content "3 hours ago"
     end
 
-    it "can delete cache entries" do
+    it "can delete a cache entry" do
       entry = create_cache_entry(key: "new-cache")
       client = instance_double(Aws::S3::Client)
       expect(Aws::S3::Client).to receive(:new).and_return(client)
       expect(client).to receive(:delete_object).with(bucket: repository.bucket_name, key: entry.blob_key)
 
       visit "#{project.path}/github/#{installation.ubid}/cache"
+      find("#entry-#{entry.ubid} input[type=checkbox]").check
+      click_button "Delete Selected Cache Entries"
 
-      expect(page.status_code).to eq(200)
-      expect(page).to have_content entry.key
-
-      find("#entry-#{entry.ubid} .delete-btn").click
-      expect(page).to have_flash_notice("Cache '#{entry.key}' deleted.")
+      expect(page.title).to eq "Ubicloud - Caches"
+      expect(page).to have_flash_notice("1 cache entry deleted")
+      expect(entry).not_to exist
     end
 
-    it "raises not found when cache entry not exists" do
-      entry = create_cache_entry(key: "new-cache")
+    it "can delete multiple cache entries" do
+      entry1 = create_cache_entry(key: "cache-1")
+      entry2 = create_cache_entry(key: "cache-2")
+      entry3 = create_cache_entry(key: "cache-3")
       client = instance_double(Aws::S3::Client)
-      expect(Aws::S3::Client).to receive(:new).and_return(client)
-      expect(client).to receive(:delete_object).with(bucket: repository.bucket_name, key: entry.blob_key)
+      allow(Aws::S3::Client).to receive(:new).and_return(client)
+      allow(client).to receive(:delete_object)
 
       visit "#{project.path}/github/#{installation.ubid}/cache"
-      entry_ubid = entry.ubid
-      entry.destroy
+      find("#entry-#{entry1.ubid} input[type=checkbox]").check
+      find("#entry-#{entry2.ubid} input[type=checkbox]").check
+      click_button "Delete Selected Cache Entries"
 
-      find("#entry-#{entry_ubid} .delete-btn").click
-      expect(page.status_code).to eq 404
+      expect(page.title).to eq "Ubicloud - Caches"
+      expect(page).to have_flash_notice("2 cache entries deleted")
+      expect(entry1).not_to exist
+      expect(entry2).not_to exist
+      expect(entry3).to exist
+      expect(DB[:audit_log].where(action: "destroy").count).to eq(1)
+    end
+
+    it "handles no cache entries selected for deletion" do
+      create_cache_entry(key: "new-cache")
+
+      visit "#{project.path}/github/#{installation.ubid}/cache"
+      click_button "Delete Selected Cache Entries"
+      expect(page).to have_flash_notice("No cache entries selected for deletion")
+      expect(page.title).to eq "Ubicloud - Caches"
     end
 
     it "can delete all cache entries for a repository" do

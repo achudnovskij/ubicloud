@@ -139,6 +139,28 @@ class Clover
         view "github/cache"
       end
 
+      r.delete web?, "cache" do
+        ubids = typecast_params.array(:ubid_uuid, "ubids") || []
+        entries = @installation.cache_entries_dataset.where(Sequel[:github_cache_entry][:id] => ubids).all
+
+        if entries.empty?
+          no_audit_log
+          flash["notice"] = "No cache entries selected for deletion"
+        else
+          num_entries = entries.size
+          DB.transaction do
+            DB.ignore_duplicate_queries do
+              entries.each(&:destroy)
+            end
+            entry = entries.shift
+            audit_log(entry, "destroy", entries)
+          end
+          flash["notice"] = "#{num_entries} cache entr#{(num_entries == 1) ? "y" : "ies"} deleted"
+        end
+
+        r.redirect @installation, "/cache"
+      end
+
       r.on "repository" do
         r.get api? do
           paginated_result(installation.repositories_dataset.order(:name), Serializers::GithubRepository, installation:)
@@ -181,26 +203,21 @@ class Clover
               end
             end
 
-            r.on :ubid_uuid do |id|
+            r.is api?, :ubid_uuid do |id|
               entry = repository.cache_entries_dataset.with_pk(id)
               check_found_object(entry)
 
-              r.get api? do
+              r.get do
                 Serializers::GithubCacheEntry.serialize(entry, installation:, repository:)
               end
 
-              r.delete true do
+              r.delete do
                 DB.transaction do
                   entry.destroy
                   audit_log(entry, "destroy")
                 end
 
-                if web?
-                  flash["notice"] = "Cache '#{entry.key}' deleted."
-                  r.redirect @project, "/github/#{@installation.ubid}/cache"
-                else
-                  204
-                end
+                204
               end
             end
           end
