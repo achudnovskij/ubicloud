@@ -167,7 +167,7 @@ jobs:
           # Backgrounds the script in the *parent* shell (no subshell), so $!
           # is captured directly and `wait "$pid"` works in the parent.
           launch() {
-            local name="$1" entrypoint="$2" config="$3" timeout_min="${4:-20}"
+            local name="$1" entrypoint="$2" config="$3" timeout_min="${4:-25}"
             TEST_NAME="$name" \
             ENTRYPOINT="$entrypoint" \
             PLUGIN_CONFIG="$config" \
@@ -193,6 +193,9 @@ jobs:
 
           launch "E2E scaling PITR billing PG18" /app/pg_ubi_scaling_pitr_billing \
             "{$BASE,\"server_size\":\"m8gd.large\",\"target_size\":\"m8gd.xlarge\",\"storage_size\":118,\"target_storage_size\":237,\"pg_version\":\"18\",\"tag_key\":\"sh_test\",\"tag_value\":\"ci-e2e\",\"chc_org_id\":\"00000000-0000-0000-0000-0000ce2ee2e0\"}"
+
+          launch "E2E config security PG18" /app/pg_ubi_config_security \
+            "{$BASE,\"server_size\":\"m8gd.large\",\"storage_size\":118,\"pg_version\":\"18\"}"
 
           EXIT_CODES=()
           for pid in "${PIDS[@]}"; do
