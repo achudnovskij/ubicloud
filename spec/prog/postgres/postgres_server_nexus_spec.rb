@@ -276,7 +276,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(sshable).to receive(:_cmd).with("sudo tune2fs /dev/vdb -r 838860").and_return("Succeeded")
       expect(sshable).to receive(:_cmd).with("common/bin/daemonizer2 check format_disk").and_return("Succeeded")
       expect(sshable).to receive(:_cmd).with("sudo mkdir -p /dat")
-      expect(sshable).to receive(:_cmd).with("sudo common/bin/add_to_fstab /dev/vdb /dat ext4 defaults 0 0")
+      expect(sshable).to receive(:_cmd).with("sudo blkid -s UUID -o value /dev/vdb").and_return("11111111-2222-3333-4444-555555555555\n")
+      expect(sshable).to receive(:_cmd).with("sudo common/bin/add_to_fstab UUID=11111111-2222-3333-4444-555555555555 /dat ext4 defaults 0 0")
       expect(sshable).to receive(:_cmd).with("sudo mount /dev/vdb /dat")
       expect { nx.mount_data_disk }.to hop("run_init_script")
     end
@@ -289,7 +290,8 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(sshable).to receive(:_cmd).with("sudo update-initramfs -u")
       expect(sshable).to receive(:_cmd).with("sudo tune2fs /dev/md0 -r 1677721").and_return("Succeeded")
       expect(sshable).to receive(:_cmd).with("sudo mkdir -p /dat")
-      expect(sshable).to receive(:_cmd).with("sudo common/bin/add_to_fstab /dev/md0 /dat ext4 defaults 0 0")
+      expect(sshable).to receive(:_cmd).with("sudo blkid -s UUID -o value /dev/md0").and_return("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n")
+      expect(sshable).to receive(:_cmd).with("sudo common/bin/add_to_fstab UUID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee /dat ext4 defaults 0 0")
       expect(sshable).to receive(:_cmd).with("sudo mount /dev/md0 /dat")
       expect { nx.mount_data_disk }.to hop("run_init_script")
     end
@@ -390,6 +392,26 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(standby_nx.postgres_server).to receive(:attach_s3_policy_if_needed)
 
       expect { standby_nx.configure_walg_credentials }.to hop("initialize_database_from_backup")
+    end
+
+    it "runs a wal-g storage check when blob storage exists and hops once it succeeds" do
+      expect(server).to receive(:refresh_walg_credentials)
+      expect(server).to receive(:attach_s3_policy_if_needed)
+      expect(server.timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster))
+      expect(sshable).to receive(:_cmd).with("sudo -u postgres /usr/bin/wal-g st check read --config /etc/postgresql/wal-g.env")
+
+      expect { nx.configure_walg_credentials }.to hop("initialize_empty_database")
+    end
+
+    it "naps and registers a deadline when wal-g cannot authenticate yet" do
+      expect(server).to receive(:refresh_walg_credentials)
+      expect(server).to receive(:attach_s3_policy_if_needed)
+      expect(server.timeline).to receive(:blob_storage).and_return(instance_double(MinioCluster))
+      expect(sshable).to receive(:_cmd).with("sudo -u postgres /usr/bin/wal-g st check read --config /etc/postgresql/wal-g.env")
+        .and_raise(Sshable::SshError.new("cmd", "", "NoCredentialProviders", 1, nil))
+      expect(nx).to receive(:register_deadline).with("wait", 10 * 60)
+
+      expect { nx.configure_walg_credentials }.to nap(5)
     end
   end
 
@@ -1380,6 +1402,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
 
     it "hops to configure_metrics if configure_metrics is set" do
       nx.incr_configure_metrics
+      expect(nx).to receive(:register_deadline).with("wait", 3 * 60)
       expect { nx.wait }.to hop("configure_metrics")
     end
 
@@ -1391,6 +1414,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
 
     it "hops to configure_logs if configure_logs is set" do
       nx.incr_configure_logs
+      expect(nx).to receive(:register_deadline).with("wait", 3 * 60)
       expect { nx.wait }.to hop("configure_logs")
     end
 

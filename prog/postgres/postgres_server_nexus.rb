@@ -123,7 +123,8 @@ class Prog::Postgres::PostgresServerNexus < Prog::Base
       vm.sshable.cmd("sudo tune2fs :path -r :reserve_blocks", path: device_path, reserve_blocks:)
 
       vm.sshable.cmd("sudo mkdir -p /dat")
-      vm.sshable.cmd("sudo common/bin/add_to_fstab :device_path /dat ext4 defaults 0 0", device_path:)
+      device_uuid = vm.sshable.cmd("sudo blkid -s UUID -o value :device_path", device_path:).strip
+      vm.sshable.cmd("sudo common/bin/add_to_fstab UUID=:device_uuid /dat ext4 defaults 0 0", device_uuid:)
       vm.sshable.cmd("sudo mount :device_path /dat", device_path:)
 
       hop_run_init_script
@@ -167,6 +168,14 @@ class Prog::Postgres::PostgresServerNexus < Prog::Base
   label def configure_walg_credentials
     postgres_server.attach_s3_policy_if_needed
     postgres_server.refresh_walg_credentials
+
+    # AttachRolePolicy is eventually consistent on AWS.
+    # Wait for wal-g to be able to connect to storage before moving.
+    unless walg_credentials_ready?
+      register_deadline("wait", 10 * 60)
+      nap 5
+    end
+
     hop_initialize_empty_database if postgres_server.primary?
     hop_initialize_database_from_backup
   end
@@ -654,6 +663,7 @@ SQL
 
     when_configure_metrics_set? do
       decr_configure_metrics
+      register_deadline("wait", 3 * 60)
       hop_configure_metrics
     end
 
@@ -661,6 +671,7 @@ SQL
 
     when_configure_logs_set? do
       decr_configure_logs
+      register_deadline("wait", 3 * 60)
       hop_configure_logs
     end
 
@@ -944,6 +955,15 @@ SQL
 
   def version
     postgres_server.version
+  end
+
+  def walg_credentials_ready?
+    return true if postgres_server.timeline.blob_storage.nil?
+
+    vm.sshable.cmd("sudo -u postgres /usr/bin/wal-g st check read --config /etc/postgresql/wal-g.env")
+    true
+  rescue Sshable::SshError
+    false
   end
 
   def daemonized_restart
