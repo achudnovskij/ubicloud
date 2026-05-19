@@ -17,6 +17,15 @@ class Prog::Postgres::PostgresServerNexus
       super
     end
 
+    # configure_metrics already sets up log collection in our fork, so the
+    # upstream configure-logs daemon command is a no-op. Run `true` so the
+    # daemonizer marker exists and super's success branch hops as normal.
+    def configure_logs
+      Clog.emit("configure_logs skipped; logs handled by configure_metrics")
+      vm.sshable.d_run("configure_logs", "true")
+      super
+    end
+
     def setup_otel_collector
       register_deadline("bootstrap_rhizome", 2 * 60)
       setup_otel

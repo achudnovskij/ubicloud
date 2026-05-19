@@ -590,4 +590,26 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
       expect { nx.configure_metrics }.to hop("configure_logs")
     end
   end
+
+  describe "#configure_logs" do
+    before do
+      allow(sshable).to receive(:d_check).with("configure_logs").and_return("Succeeded")
+      allow(sshable).to receive(:d_clean).with("configure_logs")
+    end
+
+    it "emits a Clog, stamps the daemonizer with a no-op, and hops via super to wait" do
+      expect(Clog).to receive(:emit).with("configure_logs skipped; logs handled by configure_metrics")
+      expect(sshable).to receive(:d_run).with("configure_logs", "true")
+      expect(sshable).not_to receive(:d_run).with("configure_logs", "/home/ubi/postgres/bin/configure-logs", anything)
+      expect(sshable).to receive(:d_clean).with("configure_logs")
+      expect { nx.configure_logs }.to hop("wait")
+    end
+
+    it "routes through the initial-provisioning hop chain in super" do
+      nx.incr_initial_provisioning
+      expect(Clog).to receive(:emit).with("configure_logs skipped; logs handled by configure_metrics")
+      expect(sshable).to receive(:d_run).with("configure_logs", "true")
+      expect { nx.configure_logs }.to hop("setup_hugepages")
+    end
+  end
 end

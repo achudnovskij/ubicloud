@@ -884,8 +884,15 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
   describe "#configure_logs" do
     let(:logs_config) { {instance: "pg123", server_role: "primary", version: "17", log_destinations: []} }
 
+    # The override at override/prog/postgres/postgres_server_nexus.rb prepends
+    # a Clog.emit + d_run("configure_logs", "true") step before delegating to
+    # super. Allow both here so the base assertions below exercise super's
+    # behavior without being tripped by the prepended no-op stamp.
     before do
       allow(nx.postgres_server).to receive(:logs_config).and_return(logs_config)
+      allow(Clog).to receive(:emit).and_call_original
+      allow(Clog).to receive(:emit).with("configure_logs skipped; logs handled by configure_metrics")
+      allow(sshable).to receive(:d_run).with("configure_logs", "true")
     end
 
     it "naps if a parseable resource is available but log aggregation is not setup" do
