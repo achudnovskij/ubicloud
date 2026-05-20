@@ -101,12 +101,12 @@ RSpec.describe PostgresResource do
     let(:vm1) { create_hosted_vm(project, private_subnet, "pg-vm-1") }
     let(:vm2) { create_hosted_vm(project, private_subnet, "pg-vm-2") }
     let(:ps1) {
-      PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm1.id,
-        is_representative: true, synchronization_status: "ready", timeline_access: "push", version: "16")
+      PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm1.id, is_representative: true,
+        synchronization_status: "ready", timeline_access: "push", version: postgres_resource.target_version)
     }
     let(:ps2) {
       PostgresServer.create(timeline:, resource_id: postgres_resource.id, vm_id: vm2.id,
-        synchronization_status: "ready", timeline_access: "push", version: "16")
+        synchronization_status: "ready", timeline_access: "fetch", version: postgres_resource.target_version)
     }
 
     it "provisions a new server without excluding hosts when Config.allow_unspread_servers is true for regular instances" do
@@ -124,20 +124,40 @@ RSpec.describe PostgresResource do
       expect(new_server.vm.strand.stack[0]["exclude_data_centers"]).to eq([])
     end
 
-    it "provisions a new server but excludes currently used data centers" do
-      allow(Config).to receive(:allow_unspread_servers).and_return(false)
-      ps1
-      ps2
-      vm_host_1 = create_vm_host
-      vm_host_1.update(data_center: "dc1")
-      vm1.update(vm_host_id: vm_host_1.id)
-      vm2.update(vm_host_id: vm_host_1.id)
+    describe "excludes only active server data centers" do
+      before do
+        allow(Config).to receive(:allow_unspread_servers).and_return(false)
+        ps1
+        ps2
+        vm_host_1 = create_vm_host
+        vm_host_1.update(data_center: "dc1")
+        vm_host_2 = create_vm_host
+        vm_host_2.update(data_center: "dc2")
+        vm1.update(vm_host_id: vm_host_1.id)
+        VmStorageVolume.create(vm_id: vm1.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
+        vm2.update(vm_host_id: vm_host_2.id)
+        VmStorageVolume.create(vm_id: vm2.id, size_gib: postgres_resource.target_storage_size_gib, boot: false, disk_index: 0)
+        allow(postgres_resource).to receive(:servers).and_return([ps1, ps2])
+      end
 
-      expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: ["dc1"])).and_call_original
-      postgres_resource.provision_new_standby
-      expect(postgres_resource.reload.servers.count).to eq(3)
-      new_server = PostgresServer.exclude(id: [ps1.id, ps2.id]).order(:created_at).last
-      expect(new_server.vm.strand.stack[0]["exclude_data_centers"]).to eq(["dc1"])
+      it "excludes both data centers when both servers are active" do
+        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: contain_exactly("dc1", "dc2"))).and_call_original
+        postgres_resource.provision_new_standby
+      end
+
+      it "does not exclude data center of a server being recycled" do
+        Strand.create_with_id(ps2, prog: "Postgres::PostgresServerNexus", label: "wait")
+        ps2.incr_recycle
+        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: ["dc1"])).and_call_original
+        postgres_resource.provision_new_standby
+      end
+
+      it "does not exclude data center of a server being destroyed" do
+        Strand.create_with_id(ps2, prog: "Postgres::PostgresServerNexus", label: "wait")
+        ps2.incr_destroy
+        expect(Prog::Postgres::PostgresServerNexus).to receive(:assemble).with(hash_including(exclude_data_centers: ["dc1"])).and_call_original
+        postgres_resource.provision_new_standby
+      end
     end
 
     describe "use_different_az excludes only active server AZs" do
@@ -1216,25 +1236,25 @@ RSpec.describe PostgresResource do
   end
 
   describe ".postgres_locations" do
-    it "includes gcp-us-central1 when project has it in visible_locations" do
-      project.set_ff_visible_locations(["gcp-us-central1"])
+    it "includes gcp-us-central1 when project has it in visible_postgres_locations" do
+      project.set_ff_visible_postgres_locations(["gcp-us-central1"])
       names = described_class.postgres_locations(project).map(&:name)
       expect(names).to include("gcp-us-central1")
     end
 
-    it "excludes gcp-us-central1 when project has no visible_locations flag" do
-      expect(project.get_ff_visible_locations).to be_nil
+    it "excludes gcp-us-central1 when project has no visible_postgres_locations flag" do
+      expect(project.get_ff_visible_postgres_locations).to be_nil
       names = described_class.postgres_locations(project).map(&:name)
       expect(names).not_to include("gcp-us-central1")
     end
 
-    it "excludes gcp-us-central1 when project's visible_locations is []" do
-      project.set_ff_visible_locations([])
+    it "excludes gcp-us-central1 when project's visible_postgres_locations is []" do
+      project.set_ff_visible_postgres_locations([])
       names = described_class.postgres_locations(project).map(&:name)
       expect(names).not_to include("gcp-us-central1")
     end
 
-    it "includes AWS public regions regardless of visible_locations" do
+    it "includes AWS public regions regardless of visible_postgres_locations" do
       names = described_class.postgres_locations(project).map(&:name)
       expect(names).to include("us-east-1", "us-west-2")
     end
