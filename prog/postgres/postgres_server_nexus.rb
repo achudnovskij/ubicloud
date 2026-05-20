@@ -171,7 +171,7 @@ class Prog::Postgres::PostgresServerNexus < Prog::Base
 
     # AttachRolePolicy is eventually consistent on AWS.
     # Wait for wal-g to be able to connect to storage before moving.
-    unless walg_credentials_ready?
+    unless postgres_server.walg_credentials_ready?
       register_deadline("wait", 10 * 60)
       nap 5
     end
@@ -955,15 +955,6 @@ SQL
 
   def version
     postgres_server.version
-  end
-
-  def walg_credentials_ready?
-    return true if postgres_server.timeline.blob_storage.nil?
-
-    vm.sshable.cmd("sudo -u postgres /usr/bin/wal-g st check read --config /etc/postgresql/wal-g.env")
-    true
-  rescue Sshable::SshError
-    false
   end
 
   def daemonized_restart
