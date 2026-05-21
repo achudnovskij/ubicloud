@@ -11,7 +11,7 @@ class OptionTreeFilter
   # :nocov:
 
   def self.data
-    @data ||= YAML.load_file("config/instance_availability.yml")
+    @data ||= YAML.load_file("config/postgres_instance_availability.yaml")
   end
 
   # Filter based on provided options hash

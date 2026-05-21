@@ -11,8 +11,11 @@ require "yaml"
 # Usage: ruby bin/generate_instance_availability.rb <output_file_path>
 #
 class InstanceAvailabilityGenerator
-  # Instance families we're interested in
-  INSTANCE_FAMILIES = Option::AWS_FAMILY_OPTIONS
+  # Families enabled per-project but intentionally omitted from the YAML so they
+  # don't surface in the postgres-location API consumed by external clients.
+  HIDDEN_FROM_LOCATIONS_API = %w[m7gd r7gd].freeze
+
+  INSTANCE_FAMILIES = (Option::POSTGRES_FAMILY_OPTIONS.keys & Option::AWS_FAMILY_OPTIONS) - HIDDEN_FROM_LOCATIONS_API
 
   # Regions to skip (e.g. opt-in regions we don't operate in)
   EXCLUDED_REGIONS = %w[me-south-1 me-central-1].freeze
@@ -52,6 +55,7 @@ class InstanceAvailabilityGenerator
     end
     workers.each(&:join)
 
+    @data["providers"]["aws"]["locations"] = @data["providers"]["aws"]["locations"].sort.to_h
     @data
   end
 
@@ -156,7 +160,7 @@ if __FILE__ == $0
   if output_file.nil? || output_file.empty?
     puts "Usage: #{$0} <output_file_path>"
     puts ""
-    puts "Example: #{$0} config/instance_availability.yml"
+    puts "Example: #{$0} config/postgres_instance_availability.yaml"
     puts ""
     exit 1
   end

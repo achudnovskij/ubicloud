@@ -395,7 +395,7 @@ module UbicloudSetup
       end
     end
 
-    aws_family_options = %w[c6gd m6id m6gd i8ge i7i i7ie r8gd r6gd r6id]
+    aws_family_options = %w[c6gd m6id m6gd i8ge i7i i7ie r8gd r6gd r6id m7gd r7gd r8id m8id]
 
     Clog.emit "Enabling AWS instance types: #{aws_family_options}"
     project = Project[project_id]
