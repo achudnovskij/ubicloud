@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "base64"
+require "tmpdir"
 require "uri"
 require_relative "../../model"
 require_relative "../../lib/net_ssh"
@@ -135,7 +136,7 @@ class PostgresServer < Sequel::Model
 
     {
       configs:,
-      user_config: resource.user_config,
+      user_config:,
       pgbouncer_user_config: resource.pgbouncer_user_config,
       physical_slots: caught_up_standbys&.map(&:ubid),
       private_subnets: vm.private_subnets.map {
@@ -152,6 +153,14 @@ class PostgresServer < Sequel::Model
       disk_throughput_baseline_mbps:,
       strict_overcommit: !resource.skip_strict_memory_overcommit_set?,
     }
+  end
+
+  def user_config
+    config = resource.user_config
+    if !primary? && config["default_transaction_isolation"]&.include?("serializable")
+      config = config.merge("default_transaction_isolation" => "repeatable read")
+    end
+    config
   end
 
   def disk_throughput_baseline_mbps
@@ -307,7 +316,7 @@ class PostgresServer < Sequel::Model
 
   def init_health_monitor_session
     FileUtils.rm_rf(health_monitor_socket_path)
-    FileUtils.mkdir_p(health_monitor_socket_path)
+    FileUtils.mkdir_p(health_monitor_socket_path, mode: 0o700)
 
     ssh_session = vm.sshable.start_fresh_session
     ssh_session.forward.local_socket(File.join(health_monitor_socket_path, ".s.PGSQL.5432"), "/var/run/postgresql/.s.PGSQL.5432")
@@ -326,7 +335,7 @@ class PostgresServer < Sequel::Model
 
   def check_pulse(session:, previous_pulse:)
     reading = begin
-      session[:db_connection] ||= Sequel.connect(adapter: "postgres", host: health_monitor_socket_path, user: "postgres", connect_timeout: 4, keep_reference: false)
+      session[:db_connection] ||= Sequel.connect(adapter: "postgres", host: health_monitor_socket_path, port: 5432, database: "postgres", user: "postgres", connect_timeout: 4, keep_reference: false)
       last_known_lsn = session[:db_connection].get(Sequel.function(lsn_function_name).as(:lsn))
       "up"
     rescue
@@ -362,7 +371,7 @@ class PostgresServer < Sequel::Model
   end
 
   def health_monitor_socket_path
-    @health_monitor_socket_path ||= File.join(Dir.pwd, "var", "health_monitor_sockets", "pg_#{vm.ip6}")
+    @health_monitor_socket_path ||= File.join(Dir.tmpdir, "ubi-hm", "pg_#{ubid}")
   end
 
   def lsn2int(lsn)

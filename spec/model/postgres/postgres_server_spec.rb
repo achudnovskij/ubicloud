@@ -167,6 +167,24 @@ RSpec.describe PostgresServer do
       resource.incr_skip_strict_memory_overcommit
       expect(postgres_server.configure_hash[:strict_overcommit]).to be false
     end
+
+    it "downgrades serializable default_transaction_isolation to repeatable read on standbys" do
+      resource.update(user_config: {"default_transaction_isolation" => "serializable", "max_connections" => "100"})
+      expect(postgres_server.configure_hash[:user_config]["default_transaction_isolation"]).to eq("serializable")
+      postgres_server.timeline_access = "fetch"
+      expect(postgres_server).to receive(:doing_pitr?).and_return(false).at_least(:once)
+      allow(resource).to receive(:replication_connection_string).and_return("postgres://ubi_replication@host")
+      expect(postgres_server.configure_hash[:user_config]["default_transaction_isolation"]).to eq("repeatable read")
+      expect(postgres_server.configure_hash[:user_config]).to include("max_connections" => "100")
+    end
+
+    it "keeps non-serializable default_transaction_isolation on standbys" do
+      resource.update(user_config: {"default_transaction_isolation" => "repeatable read"})
+      postgres_server.timeline_access = "fetch"
+      expect(postgres_server).to receive(:doing_pitr?).and_return(false).at_least(:once)
+      allow(resource).to receive(:replication_connection_string).and_return("postgres://ubi_replication@host")
+      expect(postgres_server.configure_hash[:user_config]).to have_key("default_transaction_isolation")
+    end
   end
 
   describe "#trigger_failover" do
@@ -502,6 +520,21 @@ RSpec.describe PostgresServer do
     expect(session).to receive(:forward).and_return(forward)
     expect(postgres_server.vm.sshable).to receive(:start_fresh_session).and_return(session)
     postgres_server.init_health_monitor_session
+    expect(File.stat(postgres_server.health_monitor_socket_path).mode & 0o777).to eq(0o700)
+  end
+
+  it "passes hardcoded port and database to Sequel.connect when opening a fresh db_connection" do
+    db = instance_double(Sequel::Postgres::Database)
+    expect(Sequel).to receive(:connect).with(
+      hash_including(host: postgres_server.health_monitor_socket_path, port: 5432, database: "postgres", user: "postgres"),
+    ).and_return(db)
+    expect(db).to receive(:get).and_raise(Sequel::DatabaseConnectionError)
+    expect(postgres_server).to receive(:primary?).and_return(false)
+    expect(postgres_server).to receive(:standby?).and_return(false)
+
+    session = {ssh_session: Net::SSH::Connection::Session.allocate, db_connection: nil}
+    pulse = {reading: "down", reading_rpt: 1, reading_chg: Time.now}
+    postgres_server.check_pulse(session:, previous_pulse: pulse)
   end
 
   it "initiates a new metrics export session" do
