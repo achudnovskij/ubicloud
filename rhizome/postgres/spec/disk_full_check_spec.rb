@@ -17,12 +17,29 @@ RSpec.describe "disk-full-check" do
     FileUtils.mkdir_p(File.join(dat, "16", "data"))
     FileUtils.mkdir_p(bin)
     FileUtils.touch(File.join(dat, "pg_ctl_calls"))
+    FileUtils.touch(File.join(dat, "psql_calls"))
 
     File.write(File.join(bin, "pg_ctlcluster"), <<~SH)
       #!/bin/sh
       echo "$3" >> "#{dat}/pg_ctl_calls"
     SH
     File.chmod(0o755, File.join(bin, "pg_ctlcluster"))
+
+    # Stub psql: capture the SQL passed via -c so we can assert the
+    # pg_terminate_backend invocation issued by the restart path.
+    File.write(File.join(bin, "psql"), <<~SH)
+      #!/bin/sh
+      # find the argument after -c and append to psql_calls
+      while [ $# -gt 0 ]; do
+        if [ "$1" = "-c" ]; then
+          shift
+          echo "$1" >> "#{dat}/psql_calls"
+          break
+        fi
+        shift
+      done
+    SH
+    File.chmod(0o755, File.join(bin, "psql"))
 
     File.write(File.join(bin, "fallocate"), <<~SH)
       #!/bin/sh
@@ -37,11 +54,12 @@ RSpec.describe "disk-full-check" do
     FileUtils.rm_rf(tmpdir)
   end
 
-  def fake_df(usedp, avail)
+  def fake_df(usedp, avail, total: 107374182400)
+    used = total - avail
     File.write(File.join(bin, "df"), <<~SH)
       #!/bin/sh
       echo "Filesystem     1B-blocks          Used     Available Use% Mounted on"
-      echo "/dev/sda1      107374182400 53687091200 #{avail} #{usedp}% #{dat}"
+      echo "/dev/sda1      #{total} #{used} #{avail} #{usedp}% #{dat}"
     SH
     File.chmod(0o755, File.join(bin, "df"))
   end
@@ -54,6 +72,10 @@ RSpec.describe "disk-full-check" do
 
   def pg_ctl_calls
     File.read(File.join(dat, "pg_ctl_calls")).strip
+  end
+
+  def psql_calls
+    File.read(File.join(dat, "psql_calls")).strip
   end
 
   def auto_conf_content
@@ -121,18 +143,121 @@ RSpec.describe "disk-full-check" do
   describe "critical, <3GB available" do
     before { fake_df(50, 2_000_000_000) }
 
-    it "restarts when pending restart marker exists" do
+    it "terminates customer backends when pending restart marker exists" do
       File.write(auto_conf, "default_transaction_read_only = 'on'\n")
       FileUtils.touch(pending_restart)
       run_check
-      expect(pg_ctl_calls).to eq "restart"
+      expect(pg_ctl_calls).to eq ""
+      expect(psql_calls).to include("pg_terminate_backend")
+      expect(psql_calls).to include("ubi_replication")
+      expect(psql_calls).to include("ubi_monitoring")
       expect(File.exist?(pending_restart)).to be false
     end
 
-    it "does not restart without pending restart marker" do
+    it "does not terminate backends without pending restart marker" do
       File.write(auto_conf, "default_transaction_read_only = 'on'\n")
       run_check
       expect(pg_ctl_calls).to eq ""
+      expect(psql_calls).to eq ""
+    end
+  end
+
+  # Tier boundaries (matching disk-full-check):
+  #   <= 64GB   (hobby)        recover 2GB,  readonly 1GB,   restart 512MB
+  #   <= 128GB                 recover 7GB,  readonly 5GB,   restart 3GB
+  #   <= 512GB                 recover 10GB, readonly 7GB,   restart 5GB
+  #    > 512GB  (percentage)   recover 3%,   readonly 2%,    restart 1%
+  describe "tier: <= 64GB (hobby)" do
+    let(:total) { 32 * 1024**3 } # 32GB
+
+    it "stays in margin between 1GB and 2GB available" do
+      fake_df(95, 1_500_000_000, total: total) # 1.5GB
+      run_check
+      expect(pg_ctl_calls).to eq ""
+      expect(File.exist?(human_buffer)).to be false
+    end
+
+    it "sets read-only below 1GB" do
+      fake_df(98, 900_000_000, total: total) # 0.9GB < 1GB
+      run_check
+      expect(auto_conf_content).to include("default_transaction_read_only = 'on'")
+      expect(pg_ctl_calls).to eq "reload"
+    end
+
+    it "creates a 500M human buffer above 2GB" do
+      fake_df(80, 3_000_000_000, total: total) # 3GB > 2GB
+      run_check
+      expect(File.exist?(human_buffer)).to be true
+    end
+  end
+
+  describe "tier: <= 512GB" do
+    let(:total) { 256 * 1024**3 } # 256GB
+
+    it "stays in margin between 7GB and 10GB available" do
+      fake_df(96, 8 * 1024**3, total: total) # 8GB: above 7GB, below 10GB
+      run_check
+      expect(pg_ctl_calls).to eq ""
+      expect(File.exist?(human_buffer)).to be false
+    end
+
+    it "sets read-only below 7GB" do
+      fake_df(97, 6 * 1024**3, total: total) # 6GB < 7GB
+      run_check
+      expect(auto_conf_content).to include("default_transaction_read_only = 'on'")
+      expect(pg_ctl_calls).to eq "reload"
+    end
+
+    it "terminates customer backends below 5GB when pending restart marker exists" do
+      fake_df(98, 4 * 1024**3, total: total) # 4GB < 5GB
+      File.write(auto_conf, "default_transaction_read_only = 'on'\n")
+      FileUtils.touch(pending_restart)
+      run_check
+      expect(psql_calls).to include("pg_terminate_backend")
+      expect(File.exist?(pending_restart)).to be false
+    end
+
+    it "clears read-only above 10GB" do
+      fake_df(90, 12 * 1024**3, total: total) # 12GB > 10GB
+      File.write(auto_conf, "default_transaction_read_only = 'on'\n")
+      FileUtils.touch(pending_restart)
+      run_check
+      expect(auto_conf_content).not_to include("default_transaction_read_only")
+      expect(pg_ctl_calls).to eq "reload"
+    end
+  end
+
+  describe "tier: > 512GB (percentage-based)" do
+    let(:total) { 1024 * 1024**3 } # 1TB -> recover 3% = 30.72GB, readonly 2% = 20.48GB, restart 1% = 10.24GB
+
+    it "stays in margin between 2% and 3%" do
+      fake_df(97, 25 * 1024**3, total: total) # 25GB: above 2%(~20.5G), below 3%(~30.7G)
+      run_check
+      expect(pg_ctl_calls).to eq ""
+      expect(File.exist?(human_buffer)).to be false
+    end
+
+    it "sets read-only below 2%" do
+      fake_df(98, 15 * 1024**3, total: total) # 15GB < 2% (~20.5G)
+      run_check
+      expect(auto_conf_content).to include("default_transaction_read_only = 'on'")
+      expect(pg_ctl_calls).to eq "reload"
+    end
+
+    it "terminates customer backends below 1% when pending restart marker exists" do
+      fake_df(99, 5 * 1024**3, total: total) # 5GB < 1% (~10.24G)
+      File.write(auto_conf, "default_transaction_read_only = 'on'\n")
+      FileUtils.touch(pending_restart)
+      run_check
+      expect(psql_calls).to include("pg_terminate_backend")
+    end
+
+    it "clears read-only above 3%" do
+      fake_df(90, 40 * 1024**3, total: total) # 40GB > 3% (~30.7G)
+      File.write(auto_conf, "default_transaction_read_only = 'on'\n")
+      run_check
+      expect(auto_conf_content).not_to include("default_transaction_read_only")
+      expect(pg_ctl_calls).to eq "reload"
     end
   end
 end
