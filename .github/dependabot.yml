@@ -1,0 +1,59 @@
+version: 2
+updates:
+  - package-ecosystem: 'bundler'
+    directory: '/'
+    schedule:
+      interval: 'daily'
+    cooldown:
+      default-days: 14
+    versioning-strategy: lockfile-only
+    allow:
+      - dependency-type: "all"
+    groups:
+      aws-dependencies:
+        patterns:
+          - "*aws*"
+      production-dependencies:
+        dependency-type: "production"
+        exclude-patterns:
+          - "*aws*"
+      development-dependencies:
+        dependency-type: "development"
+        exclude-patterns:
+          - "*aws*"
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 14
+    allow:
+      - dependency-type: "all"
+    groups:
+      js-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: 'docker'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 14
+    allow:
+      - dependency-type: "all"
+    groups:
+      docker-dependencies:
+        patterns:
+          - "*"
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 14
+    allow:
+      - dependency-type: "all"
+    groups:
+      github-actions-dependencies:
+        patterns:
+          - "*"

@@ -18,7 +18,7 @@ class Clover < Roda
         ::ApiKey => [:create_inference_api_key, :create_personal_access_token, :project_id_for_personal_access_token],
         ::BillingRecord => [:where],
         ::DiscountCode => [:first],
-        ::FirewallRule => [:cidr_for_source_type, :range_for_port_type, :port_options, :source_options],
+        ::FirewallRule => [:cidr_for_source_type, :protocol_and_range_for_port_type, :port_options, :source_options],
         ::GithubInstallation => [:with_github_installation_id],
         ::GithubRepository => [:cache_size_limit],
         ::InferenceEndpoint => [:is_public],

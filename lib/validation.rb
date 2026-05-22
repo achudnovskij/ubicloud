@@ -217,6 +217,15 @@ module Validation
     fail ValidationFailed.new({cidr: "Invalid CIDR"})
   end
 
+  ALLOWED_PROTOCOLS = %w[tcp udp].freeze
+
+  def self.validate_protocol(protocol)
+    return "tcp" if protocol.nil?
+    protocol = protocol.downcase
+    fail ValidationFailed.new({protocol: "Invalid protocol, must be tcp or udp"}) unless ALLOWED_PROTOCOLS.include?(protocol)
+    protocol
+  end
+
   def self.validate_port_range(port_range)
     return [0, 65535] if port_range.nil?
 
@@ -352,6 +361,11 @@ module Validation
 
   def self.validate_kubernetes_version(version)
     fail ValidationFailed.new({version: "Kubernetes version \"#{version}\" is not supported. Available versions: #{Option.selectable_kubernetes_versions.join(", ")}"}) unless Option.selectable_kubernetes_versions.include?(version)
+  end
+
+  def self.validate_kubernetes_location(location_id)
+    return if Option.kubernetes_locations.any? { it.id == location_id }
+    fail ValidationFailed.new({location: "Kubernetes clusters are not supported in this location. Available locations: #{Option.kubernetes_locations.map(&:display_name).join(", ")}"})
   end
 
   def self.validate_victoria_metrics_username(username)

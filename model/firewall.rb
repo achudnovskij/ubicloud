@@ -28,8 +28,8 @@ class Firewall < Sequel::Model
     update_private_subnet_firewall_rules
   end
 
-  def insert_firewall_rule(cidr, port_range, description: nil)
-    fwr = add_firewall_rule(cidr:, port_range:, description:)
+  def insert_firewall_rule(cidr, port_range, protocol: "tcp", description: nil)
+    fwr = add_firewall_rule(cidr:, port_range:, protocol:, description:)
     update_private_subnet_firewall_rules
     fwr
   end
@@ -37,8 +37,8 @@ class Firewall < Sequel::Model
   def replace_firewall_rules(new_firewall_rules)
     firewall_rules.each(&:destroy)
     FirewallRule.import(
-      [:id, :firewall_id, :cidr, :port_range],
-      new_firewall_rules.map { [FirewallRule.generate_uuid, id, DB.typecast_value(:cidr, it[:cidr]), it[:port_range]] },
+      [:id, :firewall_id, :cidr, :port_range, :protocol],
+      new_firewall_rules.map { [FirewallRule.generate_uuid, id, DB.typecast_value(:cidr, it[:cidr]), it[:port_range], it[:protocol] || "tcp"] },
     )
     associations.delete(:firewall_rules)
 
