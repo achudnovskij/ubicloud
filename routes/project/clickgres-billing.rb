@@ -54,7 +54,7 @@ class Clover
       end
 
       dataset = @project.postgres_resources_dataset
-        .eager(:semaphores, :location, strand: :children, representative_server: [:strand, vm: :vm_storage_volumes])
+        .eager(:semaphores, :location, strand: :children, representative_server: [:strand, :semaphores, vm: :vm_storage_volumes])
 
       if has_ids
         dataset = dataset.where(Sequel[:postgres_resource][:id] => ids)
