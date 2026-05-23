@@ -32,6 +32,19 @@ if [ ${#REGIONS[@]} -eq 0 ]; then
   REGIONS=("us-west-2")
 fi
 
+# 0. Sync mise-managed tools (ruby/nodejs/golang/victoria-metrics) from
+#    .tool-versions and re-bundle if Ruby was bumped by an upstream merge.
+echo ""
+echo "=== Syncing mise tools from .tool-versions ==="
+"$SCRIPT_DIR/sync-tool-versions.sh"
+# After a tool-version bump, the parent shell's PATH still points at the
+# previously-active versions. Refresh this script's env so the remaining
+# steps (rake, bundle exec, foreman) run under the new active tools.
+MISE_BIN="${MISE:-/home/vscode/.local/bin/mise}"
+if [ -x "$MISE_BIN" ]; then
+  eval "$("$MISE_BIN" env -s bash)"
+fi
+
 # 1. Run database migrations to latest version
 echo ""
 echo "=== Running database migrations (rake dev_up) ==="

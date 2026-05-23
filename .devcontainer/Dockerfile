@@ -1,6 +1,5 @@
 FROM ubuntu:24.04
 
-ARG NODE_VERSION=24.12.0
 ARG DEBIAN_FRONTEND=noninteractive
 ARG WORKSPACE_FOLDER_NAME=ubicloud
 
@@ -65,11 +64,9 @@ RUN useradd -m -s /bin/bash vscode \
 USER vscode
 WORKDIR /home/vscode
 
-# Install mise and Node.js (Node changes less frequently than Ruby)
+# Install mise (tool versions are synced from .tool-versions in a later step)
 RUN curl https://mise.run | sh \
-    && echo 'eval "$(/home/vscode/.local/bin/mise activate bash)"' >> /home/vscode/.bashrc \
-    && /home/vscode/.local/bin/mise install node@${NODE_VERSION} \
-    && /home/vscode/.local/bin/mise use --global node@${NODE_VERSION}
+    && echo 'eval "$(/home/vscode/.local/bin/mise activate bash)"' >> /home/vscode/.bashrc
 
 # Use mise shims for version-independent PATH
 ENV PATH="/home/vscode/.local/share/mise/shims:/home/vscode/.local/bin:${PATH}" \
@@ -78,22 +75,19 @@ ENV PATH="/home/vscode/.local/share/mise/shims:/home/vscode/.local/bin:${PATH}" 
 
 WORKDIR /workspaces/${WORKSPACE_FOLDER_NAME}
 
+# --- Tool version boundary (.tool-versions is the single source of truth) ---
+# Installs ruby/nodejs/golang/victoria-metrics via mise plus bundler+foreman.
+# Invalidates the cache below whenever .tool-versions or the sync script changes.
+COPY --chown=vscode:vscode .tool-versions .tool-versions
+COPY --chown=vscode:vscode .devcontainer/scripts/sync-tool-versions.sh .devcontainer/scripts/sync-tool-versions.sh
+RUN bash .devcontainer/scripts/sync-tool-versions.sh
+
 # Install Node dependencies (cached unless package.json changes)
 COPY --chown=vscode:vscode package.json package-lock.json ./
 RUN npm install
 
 # Install Claude Code globally
 RUN npm install -g @anthropic-ai/claude-code
-
-# --- Ruby version boundary ---
-# Ruby version is read from .tool-versions (single source of truth shared with Gemfile)
-COPY --chown=vscode:vscode .tool-versions .tool-versions
-RUN RUBY_VERSION=$(awk '/^ruby/ {print $2}' .tool-versions) \
-    && /home/vscode/.local/bin/mise install ruby@${RUBY_VERSION} \
-    && /home/vscode/.local/bin/mise use --global ruby@${RUBY_VERSION}
-
-# Install bundler and foreman
-RUN gem install bundler foreman
 
 # Install Ruby dependencies (cached unless Gemfile changes)
 COPY --chown=vscode:vscode Gemfile Gemfile.lock ./
