@@ -28,6 +28,8 @@ module UbicloudSetup
     project ||= account.create_project_with_default_policy(project_name, project_id: project_uuid)
     Clog.emit "Setting project #{project} ff=private_locations"
     project.set_ff_private_locations true
+    Clog.emit "Setting project #{project} ff=postgres_instance_type_fallback"
+    project.set_ff_postgres_instance_type_fallback true
     Clog.emit "Updating project to be billable"
     project.update(billable: true)
     Clog.emit "Creating api key for project #{project}"
