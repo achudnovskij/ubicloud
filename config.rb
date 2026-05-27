@@ -123,6 +123,8 @@ module Config
   override :minimum_invoice_charge_threshold, 0.5, float
   optional :cloudflare_turnstile_site_key, string
   optional :cloudflare_turnstile_secret_key, string
+  optional :e2e_cloudflare_api_token, string, clear: true
+  optional :e2e_cloudflare_parent_zone_name, string
   override :allow_unspread_servers, !production?, bool
   override :control_plane_outbound_cidrs, "0.0.0.0/0,::/0", array(string)
   optional :git_commit_hash, string
@@ -177,7 +179,7 @@ module Config
   override :vhost_block_backend_version, "v0.2.2", string
 
   # Boot Images
-  override :default_boot_image_name, "ubuntu-jammy", string
+  override :default_boot_image_name, "ubuntu-noble", string
 
   # Machine Images
   override :machine_image_max_size_gib, 40, int
