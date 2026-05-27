@@ -47,21 +47,27 @@ done < "$TOOL_VERSIONS"
 # previously-active tool bin dirs (mise activate baked them in at shell start).
 # Refresh our env so the rest of this script and its children (gem, bundle)
 # pick up the new active versions instead of the stale shell PATH.
-if "$MISE" env -s bash >/tmp/.mise_env.$$ 2>/dev/null && [ -s /tmp/.mise_env.$$ ]; then
-  # shellcheck disable=SC1090
-  . /tmp/.mise_env.$$
+mise_env_output="$("$MISE" env -s bash 2>/dev/null || true)"
+if [ -n "$mise_env_output" ]; then
+  eval "$mise_env_output"
 fi
-rm -f /tmp/.mise_env.$$
+unset mise_env_output
 
-# bundler and foreman live in the active Ruby's gem dir, so they must be
-# present after any Ruby reinstall. Install only when missing.
+# bundler must match the version pinned in Gemfile.lock's BUNDLED WITH;
+# otherwise `bundle check` / `bundle install` can fail with a version mismatch.
+# foreman has no such pin, so any installed version is fine.
 if command -v gem >/dev/null 2>&1; then
-  for g in bundler foreman; do
-    if ! gem list -i "$g" >/dev/null 2>&1; then
-      echo "=== gem install $g ==="
-      gem install "$g"
+  if [ -f "$REPO_ROOT/Gemfile.lock" ]; then
+    bundler_version="$(awk '/^BUNDLED WITH$/{getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit}' "$REPO_ROOT/Gemfile.lock")"
+    if [ -n "$bundler_version" ] && ! gem list -i bundler -v "$bundler_version" >/dev/null 2>&1; then
+      echo "=== gem install bundler -v $bundler_version ==="
+      gem install bundler -v "$bundler_version"
     fi
-  done
+  fi
+  if ! gem list -i foreman >/dev/null 2>&1; then
+    echo "=== gem install foreman ==="
+    gem install foreman
+  fi
 fi
 
 # Reconcile the bundle. Cheap when satisfied; otherwise fetches git-sourced
