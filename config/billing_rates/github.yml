@@ -1,3 +1,7 @@
+# NOT AUTHORITATIVE.
+# Deployed billing rates are generated from ClickHouse/clickgres-platform
+# shared/common.yaml, which overwrites this directory. Edits here affect
+# tests and local dev only.
 - { id: 12c84463-3456-4dcd-9873-a7a32a15709c, resource_type: GitHubRunnerMinutes,         resource_family: standard-2,                 location: global,         unit_price: 0.0010000000, billed_by: amount,   active_from: 2026-05-01T00:00:00Z, byoc: false }
 - { id: 2b5a5740-45ed-42cc-82bd-f5a9554faf02, resource_type: GitHubRunnerMinutes,         resource_family: standard-4,                 location: global,         unit_price: 0.0020000000, billed_by: amount,   active_from: 2026-05-01T00:00:00Z, byoc: false }
 - { id: 51388957-b546-499d-bd3b-86a38e173901, resource_type: GitHubRunnerMinutes,         resource_family: standard-8,                 location: global,         unit_price: 0.0040000000, billed_by: amount,   active_from: 2026-05-01T00:00:00Z, byoc: false }

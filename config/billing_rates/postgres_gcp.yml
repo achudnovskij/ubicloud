@@ -1,3 +1,7 @@
+# NOT AUTHORITATIVE.
+# Deployed billing rates are generated from ClickHouse/clickgres-platform
+# shared/common.yaml, which overwrites this directory. Edits here affect
+# tests and local dev only.
 - { id: d73f6e32-ab63-8d78-b5a3-dfe82128c696, resource_type: PostgresStorage,              resource_family: standard,                   location: gcp-us-central1, unit_price: 0.0000023148, billed_by: duration, active_from: 2025-01-01T00:00:00Z, byoc: false }
 - { id: a24420ab-9ec6-8178-a825-5ebef077917f, resource_type: PostgresStandbyStorage,      resource_family: standard,                   location: gcp-us-central1, unit_price: 0.0000023148, billed_by: duration, active_from: 2025-01-01T00:00:00Z, byoc: false }
 - { id: 50bea3f8-a287-8d78-8ce2-b004e11a4e38, resource_type: PostgresVCpu,                resource_family: standard-c4a-standard,      location: gcp-us-central1, unit_price: 0.0016703100, billed_by: duration, active_from: 2025-01-01T00:00:00Z, byoc: false }

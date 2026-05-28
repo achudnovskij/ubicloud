@@ -36,3 +36,7 @@ Prioritize existing skills and scripts before reaching for ad-hoc commands:
 ## Multi-Agent Teams
 
 `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` is enabled in `settings.json`. Use `TeamCreate`, `TaskCreate`, `SendMessage` to spin up parallel investigation agents (e.g., one for control plane analysis, one for VM SSH inspection).
+
+## Billing Rate YAMLs
+
+The files under `config/billing_rates/*.yml` are **NOT AUTHORITATIVE** for staging or production. Deployed billing rates are generated from `ClickHouse/clickgres-platform` `shared/common.yaml`, which overwrites this directory. Edits here affect tests and local dev only. When debugging billing/pricing issues in a deployed environment (e.g. `"Resource family X is not available in location Y"`, or `nil` `unit_price` from `BillingRate`), inspect the running container's `/app/config/billing_rates/` files — do not assume this repo's copies match.

@@ -1,3 +1,7 @@
+# NOT AUTHORITATIVE.
+# Deployed billing rates are generated from ClickHouse/clickgres-platform
+# shared/common.yaml, which overwrites this directory. Edits here affect
+# tests and local dev only.
 - { id: fc9877ec-131c-4572-a3f2-fd512d95b348, resource_type: InferenceTokens,             resource_family: test-model,                 location: global,         unit_price: 0.0000000500, billed_by: amount,   active_from: 2024-10-14T00:00:00Z, byoc: false }
 - { id: ba80e171-0c24-4bf9-ac4f-36bdadb259c0, resource_type: InferenceTokens,             resource_family: test-model-input,           location: global,         unit_price: 0.0000000500, billed_by: amount,   active_from: 2024-10-14T00:00:00Z, byoc: false }
 - { id: c8886006-9e15-4046-b46a-163851626f83, resource_type: InferenceTokens,             resource_family: test-model-output,          location: global,         unit_price: 0.0000000500, billed_by: amount,   active_from: 2024-10-14T00:00:00Z, byoc: false }
