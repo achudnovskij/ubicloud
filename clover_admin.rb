@@ -314,6 +314,10 @@ class CloverAdmin < Roda
   end
 
   OBJECT_ACTIONS = {
+    "Account" => {
+      "suspend" => object_action("Suspend", flash: "Account suspended", &:suspend),
+      "unsuspend" => object_action("Unsuspend", flash: "Account unsuspended", &:unsuspend),
+    },
     "BootImage" => {
       "remove_boot_image" => object_action("Remove Boot Image", flash: "Boot image removal scheduled", &:remove_boot_image),
       "activate_boot_image" => object_action("Activate Boot Image", flash: "Boot image activated") do |obj|
@@ -323,20 +327,26 @@ class CloverAdmin < Roda
         obj.update(activated_at: nil)
       end,
     },
-    "Account" => {
-      "suspend" => object_action("Suspend", flash: "Account suspended", &:suspend),
-      "unsuspend" => object_action("Unsuspend", flash: "Account unsuspended", &:unsuspend),
+    "DnsZone" => {
+      "add_record" => object_action("Add DNS Record", flash: "Added DNS Record",
+        params: {
+          name: {typecast: :nonempty_str!, label: "name (without zone)"},
+          type: {typecast: :nonempty_str!},
+          data: {typecast: :nonempty_str!},
+          ttl: {typecast: :pos_int!, type: :number, attr: {min: 60, max: 3600}, value: 600},
+        }) do |obj, record_name, type, data, ttl|
+          record_name += ".#{obj.name}."
+          obj.insert_record(record_name:, type:, ttl:, data:)
+        end,
     },
-    "Invoice" => {
-      "download_pdf" => object_action("Download PDF", type: :direct) do |obj|
-        obj.generate_download_link
+    "DnsRecord" => {
+      "delete" => object_action("Delete DNS Record", flash: "Deleted DNS Record") do |obj|
+        dns_zone = DnsZone.with_pk!(obj.dns_zone_id)
+        dns_zone.delete_record(record_name: obj.name, type: obj.type, data: obj.data)
       end,
     },
     "GithubInstallation" => {
       "github_page" => github_page_action,
-    },
-    "GithubRunner" => {
-      "provision" => object_action("Provision Spare Runner", flash: "Spare runner provisioned", type: :form, &:provision_spare_runner),
     },
     "GithubRepository" => {
       "github_page" => github_page_action,
@@ -345,6 +355,14 @@ class CloverAdmin < Roda
         "<a href=\"#{Erubi.h(url)}\">Download Job Log</a>"
       rescue Octokit::NotFound
         "Job not found"
+      end,
+    },
+    "GithubRunner" => {
+      "provision" => object_action("Provision Spare Runner", flash: "Spare runner provisioned", type: :form, &:provision_spare_runner),
+    },
+    "Invoice" => {
+      "download_pdf" => object_action("Download PDF", type: :direct) do |obj|
+        obj.generate_download_link
       end,
     },
     "OidcProvider" => {
