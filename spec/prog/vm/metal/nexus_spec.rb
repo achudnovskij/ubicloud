@@ -876,35 +876,25 @@ RSpec.describe Prog::Vm::Metal::Nexus do
     end
 
     it "hops to wait if sshable and billing record created" do
+      vm.update(allocated_at: Time.now - 100)
       vm.incr_update_firewall_rules
       adr = Address.create(cidr: "10.0.0.0/24", routed_to_host_id: vm_host.id)
       AssignedVmAddress.create(ip: "10.0.0.1", address_id: adr.id, dst_vm_id: vm.id)
       expect(Socket).to receive(:tcp).with("10.0.0.1", 22, connect_timeout: 1)
-      now = Time.now
-      expect(Time).to receive(:now).and_return(now).at_least(:once)
-      expect(vm).to receive(:update).with(display_state: "running", provisioned_at: now).and_return(true)
       expect(Clog).to receive(:emit).with("vm provisioned", instance_of(Array)).and_call_original
-      allow(vm).to receive(:allocated_at).and_return(now - 100)
       expect { nx.wait_sshable }.to hop("wait")
+      expect(vm.reload.display_state).to eq("running")
+      expect(vm.provisioned_at).to be_within(10).of(Time.now)
     end
 
     it "skips a check if ipv4 is not enabled" do
+      vm.update(allocated_at: Time.now - 100)
       vm.incr_update_firewall_rules
       expect(vm.ip4).to be_nil
-      now = Time.now
-      expect(Time).to receive(:now).and_return(now).at_least(:once)
-      expect(vm).to receive(:update).with(display_state: "running", provisioned_at: now).and_return(true)
       expect(Clog).to receive(:emit).with("vm provisioned", instance_of(Array)).and_call_original
-      allow(vm).to receive(:allocated_at).and_return(now - 100)
       expect { nx.wait_sshable }.to hop("wait")
-    end
-
-    it "hops to wait_storage_catchup when a volume has machine_image_version_id" do
-      miv = create_machine_image_version_metal
-      VmStorageVolume.create(vm_id: vm.id, boot: true, size_gib: 20, disk_index: 0, use_bdev_ubi: false, machine_image_version_id: miv.id)
-      vm.incr_update_firewall_rules
-      allow(vm).to receive(:allocated_at).and_return(Time.now - 100)
-      expect { nx.wait_sshable }.to hop("wait_storage_catchup")
+      expect(vm.reload.display_state).to eq("running")
+      expect(vm.provisioned_at).to be_within(10).of(Time.now)
     end
   end
 
@@ -1045,6 +1035,19 @@ RSpec.describe Prog::Vm::Metal::Nexus do
       expect { nx.wait }.to hop("update_firewall_rules")
     end
 
+    it "hops to wait_storage_catchup when needed" do
+      miv = create_machine_image_version_metal
+      VmStorageVolume.create(vm_id: vm.id, boot: true, size_gib: 20, disk_index: 0, use_bdev_ubi: false, machine_image_version_id: miv.id)
+      expect { nx.wait }.to hop("wait_storage_catchup")
+    end
+
+    it "hops to update_firewall_rules before wait_storage_catchup" do
+      vm.incr_update_firewall_rules
+      miv = create_machine_image_version_metal
+      VmStorageVolume.create(vm_id: vm.id, boot: true, size_gib: 20, disk_index: 0, use_bdev_ubi: false, machine_image_version_id: miv.id)
+      expect { nx.wait }.to hop("update_firewall_rules")
+    end
+
     it "hops to restart when needed" do
       vm.incr_restart
       expect { nx.wait }.to hop("restart")
@@ -1071,7 +1074,6 @@ RSpec.describe Prog::Vm::Metal::Nexus do
   describe "#update_firewall_rules" do
     it "hops to wait_firewall_rules" do
       vm.incr_update_firewall_rules
-      expect(vm).to receive(:location).and_return(instance_double(Location, aws?: false, provider_dispatcher_group_name: "metal"))
       expect(nx).to receive(:push).with(Prog::Vnet::Metal::UpdateFirewallRules, {}, :update_firewall_rules)
       expect { nx.update_firewall_rules }
         .to change { vm.reload.update_firewall_rules_set? }.from(true).to(false)
@@ -1532,10 +1534,9 @@ RSpec.describe Prog::Vm::Metal::Nexus do
         /sudo host\/bin\/setup-vm recreate-unpersisted #{nx.vm_name}/,
         {stdin: /{"storage":{"vm.*_0":{"key":"key","init_vector":"iv","algorithm":"aes-256-gcm","auth_data":"somedata"}}}/},
       )
-      expect(vm).to receive(:update).with(display_state: "starting")
-      expect(vm).to receive(:update).with(display_state: "running")
-      expect(vm).to receive(:incr_update_firewall_rules)
       expect { nx.start_after_host_reboot }.to hop("wait")
+        .and change { vm.reload.update_firewall_rules_set? }.from(false).to(true)
+      expect(vm.reload.display_state).to eq("running")
     end
   end
 

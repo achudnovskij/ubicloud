@@ -1061,7 +1061,7 @@ paths:
                 - vm
       responses:
         '200':
-          $ref: '#/components/responses/MachineImageDetailed'
+          $ref: '#/components/responses/MachineImage'
         default:
           $ref: '#/components/responses/Error'
       tags:
@@ -1085,7 +1085,7 @@ paths:
         - $ref: '#/components/parameters/machine_image_reference'
       responses:
         '200':
-          $ref: '#/components/responses/MachineImageDetailed'
+          $ref: '#/components/responses/MachineImage'
         default:
           $ref: '#/components/responses/Error'
       tags:
@@ -1111,7 +1111,7 @@ paths:
                 - latest_version
       responses:
         '200':
-          $ref: '#/components/responses/MachineImageDetailed'
+          $ref: '#/components/responses/MachineImage'
         default:
           $ref: '#/components/responses/Error'
       tags:
@@ -3554,12 +3554,16 @@ components:
           description: Creation timestamp
           type: string
           format: date-time
+        latest:
+          description: True if this is the machine image's currently-published latest version
+          type: boolean
       additionalProperties: false
       required:
         - id
         - version
         - state
         - created_at
+        - latest
     Nic:
       type: object
       properties:
@@ -3830,15 +3834,12 @@ components:
         fallback_active:
           description: Whether the server is running on a fallback instance type
           type: boolean
-        vm:
-          $ref: '#/components/schemas/Vm'
       additionalProperties: false
       required:
         - id
         - role
         - state
         - synchronization_status
-        - vm
     PostgresBackup:
       type: object
       properties:
@@ -4823,23 +4824,6 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/MachineImage'
-    MachineImageDetailed:
-      description: A machine image with version details
-      content:
-        application/json:
-          schema:
-            type: object
-            additionalProperties: false
-            allOf:
-              - $ref: '#/components/schemas/MachineImage'
-              - additionalProperties: false
-                required:
-                  - versions
-                properties:
-                  versions:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/MachineImageVersion'
     MachineImages:
       description: A list of machine images
       content:
