@@ -39,15 +39,13 @@ RSpec.describe Clover, "machine-image" do
   end
 
   describe "get" do
-    it "returns image by name with versions detail" do
+    it "returns image by name" do
       mi.update(latest_version_id: mi_version.id)
       get "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}"
       expect(last_response.status).to eq(200)
       body = JSON.parse(last_response.body)
       expect(body["name"]).to eq(mi.name)
       expect(body["latest_version"]).to eq(mi_version.version)
-      expect(body["versions"]).to be_an(Array)
-      expect(body["versions"].first["state"]).to eq("ready")
     end
 
     it "returns image by ubid" do
@@ -61,13 +59,6 @@ RSpec.describe Clover, "machine-image" do
       store
       get "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/missing"
       expect(last_response.status).to eq(404)
-    end
-
-    it "reports non-ready state from display_state" do
-      mi_version_metal.update(enabled: false, archive_size_mib: nil)
-      get "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}"
-      expect(last_response.status).to eq(200)
-      expect(JSON.parse(last_response.body)["versions"].first["state"]).to eq("creating")
     end
   end
 
@@ -358,9 +349,20 @@ RSpec.describe Clover, "machine-image" do
       expect(body["count"]).to eq(2)
       with_metal = body["items"].find { |i| i["version"] == mi_version.version }
       expect(with_metal["state"]).to eq("ready")
+      expect(with_metal["latest"]).to be false
       no_metal = body["items"].find { |i| i["version"] == "v-no-metal" }
       expect(no_metal["state"]).to be_nil
       expect(no_metal["archive_size_mib"]).to be_nil
+    end
+
+    it "marks only the machine image's latest version with latest=true" do
+      latest = MachineImageVersion.create(machine_image_id: mi.id, version: "v2")
+      MachineImageVersion.create(machine_image_id: mi.id, version: "v3")
+      mi.update(latest_version_id: latest.id)
+      get "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}/version"
+      expect(last_response.status).to eq(200)
+      latest_by_version = JSON.parse(last_response.body)["items"].to_h { |i| [i["version"], i["latest"]] }
+      expect(latest_by_version).to eq(mi_version.version => false, "v2" => true, "v3" => false)
     end
   end
 
