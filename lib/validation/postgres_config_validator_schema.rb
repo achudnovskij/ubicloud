@@ -972,7 +972,7 @@ module Validation
       "log_filename" => {
         description: "Sets the file name pattern for log files.",
         type: :string,
-        default: "postgresql.log",
+        default: "postgresql-%H.log",
       },
       "log_hostname" => {
         description: "Logs the host name in the connection logs.",
@@ -1054,7 +1054,7 @@ module Validation
         description: "Sets the amount of time to wait before forcing log file rotation.",
         type: :string,
         pattern: /\A[0-9]+(us|ms|s|min|h|d)?\z/,
-        default: "1d",
+        default: "1h",
       },
       "log_rotation_size" => {
         description: "Sets the maximum size a log file can reach before being rotated.",
