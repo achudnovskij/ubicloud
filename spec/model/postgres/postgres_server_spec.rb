@@ -144,6 +144,16 @@ RSpec.describe PostgresServer do
       expect(postgres_server.configure_hash[:configs]).to include("log_line_prefix" => "'%m [%p:%l] (%x,%v): host=%r,db=%d,user=%u,app=%a,client=%h '")
     end
 
+    it "emits hourly %H log buckets, stderr+jsonlog, truncate-on-rotation" do
+      expect(postgres_server.configure_hash[:configs]).to include(
+        "log_filename" => "'postgresql-%H.log'",
+        "log_rotation_age" => "60",
+        "log_truncate_on_rotation" => "true",
+        "log_destination" => "'stderr, jsonlog'",
+        "logging_collector" => "on",
+      )
+    end
+
     it "puts extra logging options for AWS" do
       location.update(provider: "aws")
       postgres_server.timeline_access = "push"
