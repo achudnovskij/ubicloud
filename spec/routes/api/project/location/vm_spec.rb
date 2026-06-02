@@ -84,6 +84,54 @@ RSpec.describe Clover, "vm" do
         expect(Vm.first.ip4_enabled).to be false
       end
 
+      it "rejects the web-only machine_image field" do
+        expect {
+          post "/project/#{project.ubid}/location/#{TEST_LOCATION}/vm/test-vm", {
+            public_key: "ssh key",
+            unix_user: "ubi",
+            size: "standard-2",
+            machine_image: "my-image@latest",
+          }.to_json
+        }.to raise_error(Committee::InvalidRequest, /schema does not define properties: machine_image/)
+      end
+
+      it "rejects boot_image referencing an MI the user cannot view" do
+        miv = create_machine_image_version_metal(project_id: project.id, location_id: Location::HETZNER_FSN1_ID, name: "my-image", version: "v1").machine_image_version
+        miv.machine_image.update(latest_version_id: miv.id)
+
+        other_user = create_account("other_user@example.com")
+        other_user.add_project(project)
+        other_pat = ApiKey.create_personal_access_token(other_user, project:)
+        header "Authorization", "Bearer pat-#{other_pat.ubid}-#{other_pat.key}"
+        [other_user.id, other_pat.id].each do |sid|
+          AccessControlEntry.create(project_id: project.id, subject_id: sid, action_id: ActionType::NAME_MAP["Vm:create"])
+          AccessControlEntry.create(project_id: project.id, subject_id: sid, action_id: ActionType::NAME_MAP["PrivateSubnet:view"])
+        end
+
+        post "/project/#{project.ubid}/location/#{TEST_LOCATION}/vm/test-vm", {
+          public_key: "ssh key",
+          unix_user: "ubi",
+          size: "standard-2",
+          boot_image: "my-image@latest",
+        }.to_json
+
+        expect(last_response).to have_api_error(400, "Validation failed for following fields: boot_image", {"boot_image" => "Selected machine image is not available"})
+        expect(Vm.count).to eq(0)
+      end
+
+      it "rejects the web MI sentinel as an invalid boot image name" do
+        post "/project/#{project.ubid}/location/#{TEST_LOCATION}/vm/test-vm", {
+          public_key: "ssh key",
+          unix_user: "ubi",
+          size: "standard-2",
+          boot_image: "__machine_image",
+        }.to_json
+
+        expect(last_response.status).to eq(400)
+        expect(JSON.parse(last_response.body).dig("error", "details", "boot_image")).to match(/not a valid boot image name/)
+        expect(Vm.count).to eq(0)
+      end
+
       it "success with private subnet" do
         ps_id = Prog::Vnet::SubnetNexus.assemble(project.id, name: "dummy-ps-1", location_id: Location[display_name: TEST_LOCATION].id).ubid
 

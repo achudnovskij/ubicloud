@@ -66,8 +66,13 @@ module ContentGenerator
       ]
     end
 
-    def self.boot_image(boot_image)
+    def self.boot_image(_location, boot_image)
+      return "Machine Image" if boot_image == "__machine_image"
       Option::BootImages.find { it.name == boot_image }.display_name
+    end
+
+    def self.machine_image(_location, machine_image)
+      machine_image[:display_name]
     end
   end
 
