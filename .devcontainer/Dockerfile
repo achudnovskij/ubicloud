@@ -55,11 +55,26 @@ RUN ARCH=$(uname -m) && curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linu
 ARG OTEL_VERSION=0.146.0
 RUN ARCH=$(uname -m) && case "$ARCH" in x86_64) ARCH=amd64;; aarch64) ARCH=arm64;; esac \
     && curl -fsSL "https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v${OTEL_VERSION}/otelcol-contrib_${OTEL_VERSION}_linux_${ARCH}.tar.gz" \
-        | tar xz -C /usr/local/bin otelcol-contrib
+    | tar xz -C /usr/local/bin otelcol-contrib
+
+# Install Docker CLI ("docker outside of docker" — daemon stays on the host;
+# the socket is bind-mounted in via docker-compose.yml). vscode user has
+# passwordless sudo, so docker is invoked as `sudo docker ...` to sidestep
+# host-vs-container docker-group GID mismatch.
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && . /etc/os-release \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
+    > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root vscode user
 RUN useradd -m -s /bin/bash vscode \
-    && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+    && echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && usermod -aG root vscode
 
 USER vscode
 WORKDIR /home/vscode
