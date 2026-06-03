@@ -178,6 +178,115 @@ RSpec.describe Clover, "clickgres-billing" do
     end
   end
 
+  describe "POST /project/:project_id/clickgres-billing/postgres/:ubid/deactivate" do
+    before do
+      postgres_project = Project.create(name: "default")
+      allow(Config).to receive(:postgres_service_project_id).and_return(postgres_project.id)
+    end
+
+    def create_pg(name)
+      Prog::Postgres::PostgresResourceNexus.assemble(
+        project_id: project.id,
+        location_id: Location.first.id,
+        name:,
+        target_vm_size: "standard-2",
+        target_storage_size_gib: 128,
+      ).subject
+    end
+
+    it "increments billing_deactivate semaphore, returns ubid and phase 'pending' when strand is in wait" do
+      pg = create_pg("pg-deactivate-1")
+      pg.strand.update(label: "wait")
+
+      expect {
+        post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      }.to change { Semaphore.where(strand_id: pg.strand.id, name: "billing_deactivate").count }.by(1)
+
+      expect(last_response.status).to eq(200)
+      body = JSON.parse(last_response.body)
+      expect(body["ubid"]).to eq(pg.ubid)
+      expect(body["phase"]).to eq("pending")
+    end
+
+    it "writes an audit_log row with action billing_deactivate_requested" do
+      pg = create_pg("pg-deactivate-audit")
+      pg.strand.update(label: "wait")
+
+      expect {
+        post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      }.to change { DB[:audit_log].where(Sequel.lit("? = ANY(object_ids)", pg.id)).count }.by(1)
+
+      expect(last_response.status).to eq(200)
+      expect(DB[:audit_log].where(action: "billing_deactivate_requested").where(Sequel.lit("? = ANY(object_ids)", pg.id)).count).to eq(1)
+    end
+
+    it "does NOT pile up duplicate semaphores OR audit_log rows when polled repeatedly while a deactivate is already in flight" do
+      pg = create_pg("pg-deactivate-poll")
+      pg.strand.update(label: "wait")
+
+      # First POST kicks off — should write one semaphore row + one audit_log row.
+      expect {
+        post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      }.to change { Semaphore.where(strand_id: pg.strand.id, name: "billing_deactivate").count }.by(1)
+        .and change { DB[:audit_log].where(action: "billing_deactivate_requested").where(Sequel.lit("? = ANY(object_ids)", pg.id)).count }.by(1)
+
+      # Subsequent POSTs (poll-style) while semaphore still queued in wait — no new rows of either kind.
+      expect {
+        3.times { post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate" }
+      }.to not_change { Semaphore.where(strand_id: pg.strand.id, name: "billing_deactivate").count }
+        .and not_change { DB[:audit_log].where(action: "billing_deactivate_requested").where(Sequel.lit("? = ANY(object_ids)", pg.id)).count }
+
+      # Strand transitioned into a deactivate phase — still no new rows.
+      pg.strand.update(label: "billing_deactivate_wait_backup")
+      expect {
+        3.times { post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate" }
+      }.to not_change { Semaphore.where(strand_id: pg.strand.id, name: "billing_deactivate").count }
+        .and not_change { DB[:audit_log].where(action: "billing_deactivate_requested").where(Sequel.lit("? = ANY(object_ids)", pg.id)).count }
+    end
+
+    it "returns 404 for an unknown ubid" do
+      post "/project/#{project.ubid}/clickgres-billing/postgres/pgqxkxmkdcpp7hj8tppqceat4n/deactivate"
+      expect(last_response.status).to eq(404)
+      expect(JSON.parse(last_response.body).dig("error", "message")).to eq("Postgres resource not found")
+    end
+
+    it "maps strand label 'billing_deactivate_suspend' to phase 'suspending'" do
+      pg = create_pg("pg-deactivate-suspending")
+      pg.strand.update(label: "billing_deactivate_suspend")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)["phase"]).to eq("suspending")
+    end
+
+    it "maps strand label 'billing_deactivate_wait_backup' to phase 'backup_in_progress'" do
+      pg = create_pg("pg-deactivate-wait-backup")
+      pg.strand.update(label: "billing_deactivate_wait_backup")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)["phase"]).to eq("backup_in_progress")
+    end
+
+    it "maps strand label 'destroy' to phase 'destroying'" do
+      pg = create_pg("pg-deactivate-destroying")
+      pg.strand.update(label: "destroy")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)["phase"]).to eq("destroying")
+    end
+
+    it "maps strand label 'wait_children_destroyed' to phase 'destroying'" do
+      pg = create_pg("pg-deactivate-wait-children")
+      pg.strand.update(label: "wait_children_destroyed")
+
+      post "/project/#{project.ubid}/clickgres-billing/postgres/#{pg.ubid}/deactivate"
+      expect(last_response.status).to eq(200)
+      expect(JSON.parse(last_response.body)["phase"]).to eq("destroying")
+    end
+  end
+
   describe "POST /project/:project_id/clickgres-billing/postgres-details" do
     before do
       postgres_project = Project.create(name: "default")

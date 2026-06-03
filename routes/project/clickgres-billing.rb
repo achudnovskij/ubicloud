@@ -1,6 +1,13 @@
 # frozen_string_literal: true
 
 class Clover
+  BILLING_DEACTIVATE_PHASE_BY_LABEL = {
+    "billing_deactivate_suspend" => "suspending",
+    "billing_deactivate_wait_backup" => "backup_in_progress",
+    "destroy" => "destroying",
+    "wait_children_destroyed" => "destroying",
+  }.freeze
+
   hash_branch(:project_prefix, "clickgres-billing") do |r|
     r.get "postgres-resources" do
       # Project ownership enforced by parent route; no finer-grained RBAC needed for this machine-to-machine API.
@@ -65,6 +72,29 @@ class Clover
       end
 
       {items: Serializers::Postgres.serialize(dataset.all)}
+    end
+
+    r.on "postgres", String do |ubid|
+      r.post "deactivate" do
+        no_authorization_needed
+
+        pg = @project.postgres_resources_dataset.first(id: UBID.to_uuid(ubid))
+        raise CloverError.new(404, "ResourceNotFound", "Postgres resource not found") unless pg
+
+        # The endpoint is poll-friendly (billing keeps calling to track phase),
+        # so the meaningful "request" event is only the first call that actually
+        # signals the strand — subsequent calls are status checks and shouldn't
+        # spam the audit log or pile up dead semaphore rows on the strand.
+        in_deactivate_phase = BILLING_DEACTIVATE_PHASE_BY_LABEL.key?(pg.strand.label)
+        if !in_deactivate_phase && !pg.billing_deactivate_set?
+          pg.incr_billing_deactivate
+          audit_log(pg, "billing_deactivate_requested")
+        else
+          no_audit_log
+        end
+        phase = BILLING_DEACTIVATE_PHASE_BY_LABEL[pg.strand.label] || "pending"
+        {ubid: pg.ubid, phase:}
+      end
     end
   end
 end
