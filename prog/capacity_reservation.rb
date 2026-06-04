@@ -12,7 +12,13 @@ class Prog::CapacityReservation < Prog::Base
   # their bare counterparts, but eligible_instance_types then intersects them with
   # current usage — so they cover only sizes actually in use, never pre-warm.
   PROVISIONED_CONSTRAINT_KEYS = %w[minimum_provisioned_cpu minimum_provisioned_storage].freeze
-  EDITABLE_KEYS = %w[instance_families enable_all_families additional_capacity allowed_capacity_decrease reconcile_interval remove_orphaned_reservations].freeze
+  EDITABLE_KEYS = %w[instance_families enable_all_families additional_capacity allowed_capacity_decrease reconcile_interval remove_orphaned_reservations min_available_az_insufficient_action].freeze
+
+  # What to do when AWS offers a type (or the whole location) in fewer than the
+  # required 3 AZs: PAGE raises an incident, WARN just logs. Defaults to PAGE;
+  # set WARN per-location for regions where a needed family (e.g. Graviton4 8gd)
+  # is genuinely offered in < 3 AZs and would otherwise page indefinitely.
+  VALID_AZ_INSUFFICIENT_ACTIONS = %w[WARN PAGE].freeze
 
   # Cost guardrails. additional_capacity is a raw
   # multiplier, so it is bounded at setup time; the per-type / per-location
@@ -59,7 +65,7 @@ class Prog::CapacityReservation < Prog::Base
   #   wait                      - when true, block until the write lands (poll a lease-free moment); default false = single attempt.
   def self.setup(location_id:, instance_families:, additional_capacity:,
     enable_all_families: false, allowed_capacity_decrease: nil, reconcile_interval: RECONCILE_INTERVAL_SECONDS,
-    remove_orphaned_reservations: false, wait: false)
+    remove_orphaned_reservations: false, min_available_az_insufficient_action: "PAGE", wait: false)
     inputs = {
       "instance_families" => instance_families,
       "enable_all_families" => enable_all_families,
@@ -67,6 +73,7 @@ class Prog::CapacityReservation < Prog::Base
       "allowed_capacity_decrease" => allowed_capacity_decrease,
       "reconcile_interval" => reconcile_interval,
       "remove_orphaned_reservations" => remove_orphaned_reservations,
+      "min_available_az_insufficient_action" => min_available_az_insufficient_action,
     }
     # Create-if-absent here; update_inputs runs outside the transaction (its wait-loop sleeps).
     existing = DB.transaction do
@@ -89,7 +96,7 @@ class Prog::CapacityReservation < Prog::Base
   # only inserts the row.
   def self.assemble(location_id:, instance_families:, additional_capacity:,
     enable_all_families: false, allowed_capacity_decrease: nil, reconcile_interval: RECONCILE_INTERVAL_SECONDS,
-    remove_orphaned_reservations: false)
+    remove_orphaned_reservations: false, min_available_az_insufficient_action: "PAGE")
     Strand.create_with_id(
       Strand.generate_uuid,
       prog: "CapacityReservation",
@@ -102,6 +109,7 @@ class Prog::CapacityReservation < Prog::Base
         "allowed_capacity_decrease" => allowed_capacity_decrease,
         "reconcile_interval" => reconcile_interval,
         "remove_orphaned_reservations" => remove_orphaned_reservations,
+        "min_available_az_insufficient_action" => min_available_az_insufficient_action,
         "current_target" => {},
         "last_observed_usage" => {},
         # last_measured_at / current_usage_per_az / reconcile_pending are written
@@ -176,6 +184,10 @@ class Prog::CapacityReservation < Prog::Base
     unless reconcile_interval.is_a?(Integer) && reconcile_interval >= MIN_RECONCILE_INTERVAL_SECONDS
       fail "reconcile_interval must be an integer >= #{MIN_RECONCILE_INTERVAL_SECONDS} seconds"
     end
+    # What to do when fewer than 3 AZs are available; nil/absent defaults to WARN.
+    unless (action = inputs["min_available_az_insufficient_action"]).nil? || VALID_AZ_INSUFFICIENT_ACTIONS.include?(action)
+      fail "min_available_az_insufficient_action must be one of #{VALID_AZ_INSUFFICIENT_ACTIONS.join(", ")}"
+    end
     unknown = families.keys - Option::AWS_FAMILY_OPTIONS
     fail "Unknown families: #{unknown}" unless unknown.empty?
     families.each do |family, constraint|
@@ -211,7 +223,7 @@ class Prog::CapacityReservation < Prog::Base
 
     azs = location_az_names
     if azs.size < 3
-      page("InsufficientAZs", "only #{azs.size} AZ(s) in location; need >=3")
+      report_insufficient_azs("only #{azs.size} AZ(s) in location; need >=3")
       update_stack(
         "current_target" => {},
         "last_observed_usage" => {},
@@ -705,10 +717,23 @@ class Prog::CapacityReservation < Prog::Base
 
     azs = (location_az_names & offered).sort
     if azs.size < 3
-      page("InsufficientAZs", "only #{azs.size} AZ(s) available for #{type}; need >=3", type)
+      report_insufficient_azs("only #{azs.size} AZ(s) available for #{type}; need >=3", type)
       return nil
     end
     azs
+  end
+
+  # Either page or just log when fewer than 3 AZs are available (location-wide in
+  # measure, or for a single type in eligible_azs), per the
+  # min_available_az_insufficient_action input. Defaults to PAGE: only an explicit
+  # "WARN" logs rather than pages, so a pre-existing strand (whose stack predates
+  # this input, leaving it nil) keeps the original page-on-insufficient behavior.
+  def report_insufficient_azs(summary, *extra)
+    if frame["min_available_az_insufficient_action"] == "WARN"
+      Clog.emit("capacity reservation insufficient azs", {capacity_reservation_insufficient_azs: {location: location.display_name, summary:, tags: extra}})
+    else
+      page("InsufficientAZs", summary, *extra)
+    end
   end
 
   # Describe this prog's active/pending ODCRs for an instance type, keyed by full

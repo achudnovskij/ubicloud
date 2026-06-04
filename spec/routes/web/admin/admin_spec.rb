@@ -1885,6 +1885,73 @@ RSpec.describe CloverAdmin do
     end
   end
 
+  describe "capacity reservations" do
+    let(:cr_location) do
+      Location.create(name: "us-west-2", provider: "aws", project_id: Project.create(name: "cr-prj").id,
+        display_name: "aws-us-west-2", ui_name: "AWS US West 2", visible: true)
+    end
+
+    def assemble_cr
+      Prog::CapacityReservation.assemble(location_id: cr_location.id,
+        instance_families: {"c6gd" => {"sizes" => ["4xlarge"]}}, additional_capacity: 0.2)
+    end
+
+    before do
+      click_link "Manage Capacity Reservations"
+    end
+
+    it "shows strand status" do
+      expect(page.title).to eq "Ubicloud Admin - Manage Capacity Reservations"
+      expect(page).to have_content("No data available for Active Capacity Reservations")
+
+      strand = assemble_cr
+      page.refresh
+      expect(page.all(".capacity-reservations-table td").map(&:text)).to eq ["CapacityReservation", "start", "0", strand.ubid, "aws-us-west-2", "{}", "", ""]
+      expect(page).to have_link("aws-us-west-2", href: "/model/Location/#{cr_location.ubid}")
+      click_link strand.ubid
+      expect(page.title).to eq "Ubicloud Admin - Strand #{strand.ubid}"
+    end
+
+    it "falls back to the location id when the location is gone" do
+      strand = assemble_cr
+      cr_location.destroy
+      page.refresh
+      expect(page.all(".capacity-reservations-table td").map(&:text)).to eq ["CapacityReservation", "start", "0", strand.ubid, strand.stack[0]["location_id"], "{}", "", ""]
+    end
+
+    it "allows pausing and unpausing strands" do
+      cr_path = page.current_path
+      strand = assemble_cr
+      page.refresh
+
+      click_button "Pause"
+      expect(page).to have_flash_notice("Strand #{strand.ubid} paused")
+      expect(strand.semaphores.map(&:name)).to eq ["pause"]
+
+      strand.this.update(schedule: "2100-01-01")
+      click_button "Unpause"
+      expect(page).to have_flash_notice("Strand #{strand.ubid} unpaused")
+      expect(strand.semaphores(reload: true)).to eq []
+      expect(strand.this.get(:schedule)).to be_within(10).of(Time.now)
+
+      visit cr_path
+      strand.destroy
+      click_button "Pause"
+      expect(page).to have_flash_error("Strand not found, it was probably already deleted")
+    end
+
+    it "allows requesting a rebalance" do
+      strand = assemble_cr
+      strand.this.update(schedule: "2100-01-01")
+      page.refresh
+
+      click_button "Rebalance"
+      expect(page).to have_flash_notice("Strand #{strand.ubid} rebalance requested")
+      expect(strand.semaphores.map(&:name)).to eq ["rebalance"]
+      expect(strand.this.get(:schedule)).to be_within(10).of(Time.now)
+    end
+  end
+
   it "shows admin list" do
     click_link "View Admin List"
     expect(page.title).to eq "Ubicloud Admin - Admin List"

@@ -89,6 +89,7 @@ RSpec.describe Prog::CapacityReservation do
       expect(frame["allowed_capacity_decrease"]).to be_nil
       expect(frame["reconcile_interval"]).to eq(described_class::RECONCILE_INTERVAL_SECONDS)
       expect(frame["remove_orphaned_reservations"]).to be false
+      expect(frame["min_available_az_insufficient_action"]).to eq("PAGE")
       expect(frame["current_target"]).to eq({})
       expect(frame["last_observed_usage"]).to eq({})
       expect(frame).not_to have_key("last_measured_at")
@@ -199,6 +200,18 @@ RSpec.describe Prog::CapacityReservation do
       expect { validate("instance_families" => {"zzz" => {"minimum_cpu" => 8}}) }.to raise_error(/Unknown families/)
     end
 
+    it "defaults min_available_az_insufficient_action and accepts WARN, PAGE, or nil" do
+      expect { validate({}) }.not_to raise_error
+      expect { validate("min_available_az_insufficient_action" => "WARN") }.not_to raise_error
+      expect { validate("min_available_az_insufficient_action" => "PAGE") }.not_to raise_error
+      expect { validate("min_available_az_insufficient_action" => nil) }.not_to raise_error
+    end
+
+    it "rejects an unknown min_available_az_insufficient_action" do
+      expect { validate("min_available_az_insufficient_action" => "warn") }.to raise_error(/min_available_az_insufficient_action must be one of/)
+      expect { validate("min_available_az_insufficient_action" => "EMAIL") }.to raise_error(/min_available_az_insufficient_action/)
+    end
+
     it "rejects a constraint object with more than one key" do
       expect { validate("instance_families" => {"c6gd" => {"minimum_cpu" => 8, "minimum_storage" => 100}}) }
         .to raise_error(/exactly one key/)
@@ -304,6 +317,11 @@ RSpec.describe Prog::CapacityReservation do
 
     it "validates the resulting input set" do
       expect { described_class.update_inputs(st, {"additional_capacity" => 99}) }.to raise_error(/finite number/)
+    end
+
+    it "treats min_available_az_insufficient_action as an editable input" do
+      described_class.update_inputs(st, {"min_available_az_insufficient_action" => "PAGE"})
+      expect(st.reload.stack.first["min_available_az_insufficient_action"]).to eq("PAGE")
     end
   end
 
@@ -443,7 +461,7 @@ RSpec.describe Prog::CapacityReservation do
       expect { nx.measure }.to hop("wait")
     end
 
-    it "pages and processes nothing when the location has fewer than 3 AZs" do
+    it "pages and processes nothing when the location has fewer than 3 AZs and the action is PAGE (default)" do
       LocationAz.where(location_id: location.id, az: "c").destroy
       expect(Prog::PageNexus).to receive(:assemble)
         .with(/only 2 AZ/, ["CapacityReservation", "InsufficientAZs", location.display_name], [st.ubid], severity: "warning")
@@ -452,6 +470,16 @@ RSpec.describe Prog::CapacityReservation do
       expect(reload_frame["current_target"]).to eq({})
       expect(reload_frame["reconcile_pending"]).to eq([])
       expect(reload_frame["last_measured_at"]).to be_within(5).of(Time.now.to_i)
+      expect(reload_frame["azs_insufficient"]).to be true
+    end
+
+    it "logs instead of paging when the location has fewer than 3 AZs and the action is WARN" do
+      refresh_frame(nx, new_values: {"min_available_az_insufficient_action" => "WARN"})
+      LocationAz.where(location_id: location.id, az: "c").destroy
+      expect(Prog::PageNexus).not_to receive(:assemble)
+      expect(Clog).to receive(:emit).with("capacity reservation insufficient azs", hash_including(:capacity_reservation_insufficient_azs))
+      expect { nx.measure }.to hop("reconcile")
+      expect(reload_frame["current_target"]).to eq({})
       expect(reload_frame["azs_insufficient"]).to be true
     end
 
@@ -1076,11 +1104,20 @@ RSpec.describe Prog::CapacityReservation do
       expect(modify_ids).not_to include("cr-small")
     end
 
-    it "pages and skips the type when fewer than 3 AZs offer it" do
+    it "pages and skips the type when fewer than 3 AZs offer it and the action is PAGE (default)" do
       stub_offerings(%w[us-west-2a us-west-2b])
       expect(Prog::PageNexus).to receive(:assemble)
         .with(/only 2 AZ\(s\) available for c6gd.4xlarge/, ["CapacityReservation", "InsufficientAZs", location.display_name, "c6gd.4xlarge"], [st.ubid], severity: "warning")
         .and_call_original
+      expect(nx.reconcile_instance_type("c6gd.4xlarge")).to be_nil
+      expect(api(:create_capacity_reservation)).to be_empty
+    end
+
+    it "logs and skips the type when fewer than 3 AZs offer it and the action is WARN" do
+      refresh_frame(nx, new_values: {"min_available_az_insufficient_action" => "WARN"})
+      stub_offerings(%w[us-west-2a us-west-2b])
+      expect(Prog::PageNexus).not_to receive(:assemble)
+      expect(Clog).to receive(:emit).with("capacity reservation insufficient azs", hash_including(:capacity_reservation_insufficient_azs))
       expect(nx.reconcile_instance_type("c6gd.4xlarge")).to be_nil
       expect(api(:create_capacity_reservation)).to be_empty
     end

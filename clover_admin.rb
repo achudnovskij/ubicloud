@@ -574,6 +574,8 @@ class CloverAdmin < Roda
     metal
   ].freeze
 
+  CAPACITY_RESERVATION_PROGS = %w[CapacityReservation].freeze
+
   plugin :autoforme do
     # :nocov:
     register_by_name if Config.development?
@@ -1218,6 +1220,36 @@ class CloverAdmin < Roda
       end
 
       strand_semaphore_action(strand_ds, LOCAL_E2E_PROGS + ["LocalE2eLoop"])
+    end
+
+    r.on "capacity_reservations" do
+      strand_ds = Strand.where(prog: CAPACITY_RESERVATION_PROGS)
+
+      r.get true do
+        @strands = strand_ds.order(:id).eager(:semaphores).all
+        view("capacity_reservations")
+      end
+
+      r.post :ubid_uuid, %w[pause unpause rebalance] do |strand_id, action|
+        unless (strand = strand_ds.with_pk(strand_id))
+          flash["error"] = "Strand not found, it was probably already deleted"
+          r.redirect "/capacity_reservations"
+        end
+
+        case action
+        when "unpause"
+          Semaphore.where(strand_id: strand.id, name: "pause").destroy
+          strand.this.update(schedule: Sequel::CURRENT_TIMESTAMP)
+        when "rebalance"
+          Semaphore.incr(strand.id, "rebalance")
+          strand.this.update(schedule: Sequel::CURRENT_TIMESTAMP)
+        else
+          Semaphore.incr(strand.id, "pause")
+        end
+
+        flash["notice"] = "Strand #{strand.ubid} #{(action == "rebalance") ? "rebalance requested" : "#{action}d"}"
+        r.redirect "/capacity_reservations"
+      end
     end
 
     r.get "admin-list" do

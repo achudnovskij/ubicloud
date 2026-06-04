@@ -1,0 +1,26 @@
+<% @page_title = "Manage Capacity Reservations" %>
+
+<% data = @strands.map do |strand|
+  frame = strand.stack[0]
+  h = strand.values.slice(:prog, :label, :try)
+  h[:id] = strand.ubid
+  location = Location[frame["location_id"]]
+  h[:location] = if location
+    table_link(location.display_name, "/model/Location/#{location.ubid}")
+  else
+    frame["location_id"]
+  end
+  h[:target] = frame["current_target"] || {}
+
+  h[:pause] = if strand.semaphores.find { it.name == "pause" }
+    table_form_button("Unpause", action: "/capacity_reservations/#{strand.ubid}/unpause", method: "post")
+  else
+    table_form_button("Pause", action: "/capacity_reservations/#{strand.ubid}/pause", method: "post")
+  end
+
+  h[:rebalance] = table_form_button("Rebalance", action: "/capacity_reservations/#{strand.ubid}/rebalance", method: "post")
+
+  h
+end %>
+
+<%== part("components/table", title: "Active Capacity Reservations", table_class: "capacity-reservations-table", data:) %>
