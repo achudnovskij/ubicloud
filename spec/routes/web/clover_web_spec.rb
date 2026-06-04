@@ -26,6 +26,18 @@ RSpec.describe Clover do
   end
 
   if Config.unfrozen_test?
+    if ENV["FORCE_AUTOLOAD"] == "1"
+      it "raises for access to hidden models" do
+        visit "/webhook/hidden-model-access"
+        expect(page.body).to eq "Attempt to access a hidden model in Clover"
+      end
+
+      it "raises for access to hidden model method" do
+        visit "/webhook/hidden-model-method-call"
+        expect(page.body).to eq "Calling Account.inspect directly in Clover is not allowed"
+      end
+    end
+
     it "raises error if no_authorization_needed called when not needed or already authorized" do
       create_account.create_project_with_default_policy("project-1")
       login
@@ -91,13 +103,20 @@ RSpec.describe Clover do
 
     visit "/webhook/test-error"
 
-    expect(page.title).to eq("Ubicloud - UnexceptedError")
+    expect(page.title).to eq("Ubicloud - UnexpectedError")
   end
 
   it "raises unexpected errors in test environment" do
     expect(Clog).not_to receive(:emit)
 
     expect { visit "/webhook/test-error?message=treat+as+unexpected+error" }.to raise_error(RuntimeError, "treat as unexpected error")
+  end
+
+  if ENV["PROCESS_TYPE"] == "web"
+    it "disallows SSH access from web process" do
+      visit "/webhook/test-ssh-access"
+      expect(page.body).to eq "undefined-undefined method 'start' for module Net::SSH-Sshable#cmd is not allowed from the web process"
+    end
   end
 
   it "does not have broken links" do

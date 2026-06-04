@@ -1298,12 +1298,14 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
     end
 
     it "hops to wait if sync replication is established" do
+      expect(standby_nx).to receive(:register_deadline).with("wait", 5 * 60).twice
       expect(representative_sshable).to receive(:_cmd).with("PGOPTIONS='-c statement_timeout=60s' psql -U postgres -t --csv -v 'ON_ERROR_STOP=1'", stdin: anything).and_return("quorum", "sync")
       expect { standby_nx.wait_synchronization }.to hop("wait")
       expect { standby_nx.wait_synchronization }.to hop("wait")
     end
 
-    it "naps if sync replication is not established" do
+    it "naps and registers a deadline while sync replication is not established" do
+      expect(standby_nx).to receive(:register_deadline).with("wait", 5 * 60).twice
       expect(representative_sshable).to receive(:_cmd).with("PGOPTIONS='-c statement_timeout=60s' psql -U postgres -t --csv -v 'ON_ERROR_STOP=1'", stdin: anything).and_return("", "async")
       expect { standby_nx.wait_synchronization }.to nap(30)
       expect { standby_nx.wait_synchronization }.to nap(30)
@@ -1400,6 +1402,16 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect { nx.wait }.to nap(6 * 60 * 60)
     end
 
+    it "skips failover while restarting even if checkup is set and unavailable" do
+      nx.incr_checkup
+      nx.incr_restart
+      expect(nx).not_to receive(:available?)
+      expect(nx).to receive(:register_deadline).with("complete_restart", 2 * 60)
+      expect(nx).to receive(:daemonized_restart).and_return(false)
+      expect { nx.wait }.to nap(1)
+      expect(postgres_server.reload.checkup_set?).to be false
+    end
+
     it "hops to configure_metrics if configure_metrics is set" do
       nx.incr_configure_metrics
       expect(nx).to receive(:register_deadline).with("wait", 3 * 60)
@@ -1443,7 +1455,7 @@ RSpec.describe Prog::Postgres::PostgresServerNexus do
       expect(nx).to receive(:register_deadline).with("complete_restart", 2 * 60)
       expect(nx).to receive(:daemonized_restart).and_return(true)
       expect(nx).to receive(:unregister_deadline).with("complete_restart")
-      expect { nx.wait }.to nap(6 * 60 * 60)
+      expect { nx.wait }.to nap(1)
       expect(Semaphore.where(strand_id: postgres_server.id, name: "restart").count).to eq(0)
     end
 

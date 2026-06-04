@@ -8,9 +8,6 @@ on:
   schedule:
     - cron:  '42 9 * * 1-5'
 
-env:
-  CLOVER_DATABASE_URL: postgres:///clover_test?user=clover
-
 jobs:
   daily-ci:
     strategy:
@@ -36,6 +33,9 @@ jobs:
 
     - name: Run each spec file in separate process
       run: bundle exec rake spec_separate
+
+    - name: Run route specs checking no SSH access from web process
+      run: bundle exec rake route_spec
 
     - name: Send notification if failed
       if: ${{ failure() && github.ref_name == 'main' }}

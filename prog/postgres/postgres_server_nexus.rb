@@ -575,6 +575,8 @@ SQL
   end
 
   label def wait_synchronization
+    register_deadline("wait", 5 * 60)
+
     query = DB["SELECT sync_state FROM pg_stat_replication WHERE application_name = :ubid", ubid: postgres_server.ubid]
     sync_state = resource.representative_server.run_query(query).chomp
     hop_wait if ["quorum", "sync"].include?(sync_state)
@@ -638,7 +640,7 @@ SQL
     end
 
     when_checkup_set? do
-      unless available?
+      unless restart_set? || available?
         register_deadline("wait", 5 * 60)
         hop_unavailable
       end
@@ -656,9 +658,8 @@ SQL
       if daemonized_restart
         decr_restart
         unregister_deadline("complete_restart")
-      else
-        nap 1
       end
+      nap 1
     end
 
     when_configure_metrics_set? do

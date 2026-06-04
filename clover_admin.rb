@@ -107,7 +107,7 @@ class CloverAdmin < Roda
   end
 
   plugin :symbol_matchers
-  symbol_matcher(:ubid, /([a-tv-z0-9]{26})/)
+  symbol_matcher(:ubid, /([a-tv-z0-9]{26})/, segment: true)
   symbol_matcher(:ubid_uuid, :ubid) { UBID.to_uuid(it) }
 
   plugin :not_found do
@@ -134,10 +134,10 @@ class CloverAdmin < Roda
 
     raise e if Config.test? && !ENV["DONT_RAISE_ADMIN_ERRORS"]
 
-    Clog.emit("admin route exception", Util.exception_to_hash(e))
     @page_title = if e.is_a?(CloverError)
       "#{e.type}: #{e.message}"
     else
+      Clog.emit("admin route exception", Util.exception_to_hash(e))
       "Internal Server Error"
     end
     view(content: "")
@@ -219,6 +219,8 @@ class CloverAdmin < Roda
         true
       end
     end
+
+    uses_instance_variables(:@_webauthn_credential_id)
 
     accounts_table :admin_account
     password_hash_table :admin_password_hash
