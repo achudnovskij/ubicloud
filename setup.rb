@@ -154,6 +154,32 @@ module UbicloudSetup
     end
   end
 
+  # Create-or-update the capacity-reservation strand when enabled, or pause it (keeping
+  # its ODCRs in place) when disabled. A location removed from the config is not visited.
+  def self.setup_capacity_reservation(location)
+    cr = location.capacity_reservation
+    created_location = Location.where(name: location.region, ui_name: location.account_name).first
+
+    if cr&.enabled
+      Clog.emit "Setting up capacity reservation for location #{location.account_name}:#{location.region}"
+      strand = Prog::CapacityReservation.setup(
+        location_id: created_location.id,
+        instance_families: cr.instance_families || {},
+        additional_capacity: cr.additional_capacity,
+        enable_all_families: cr.enable_all_families || false,
+        allowed_capacity_decrease: cr.allowed_capacity_decrease,
+        reconcile_interval: cr.reconcile_interval || Prog::CapacityReservation::RECONCILE_INTERVAL_SECONDS,
+        remove_orphaned_reservations: cr.remove_orphaned_reservations || false,
+        wait: true,
+      )
+      strand.load.decr_pause # resume if a prior disable paused it
+    elsif (existing = Prog::CapacityReservation.live_strand(created_location.id))
+      Clog.emit "Capacity reservation disabled for #{location.account_name}:#{location.region}; pausing strand #{existing.ubid}, leaving its ODCRs in place"
+      s = existing.load
+      s.incr_pause unless s.pause_set?
+    end
+  end
+
   def self.update_pg_amis(region, version, archs)
     # We just need to find and update the amis
     pg_version = version.delete_prefix "pg"
@@ -273,8 +299,11 @@ module UbicloudSetup
   #   attr_reader :cleanup_default_locations, :email, :password, :project_name, :locations
   # end
 
-  LocationConfig = Struct.new(:account_name, :name, :region, :role, :dns_suffix, :otel_otlp_destination)
+  LocationConfig = Struct.new(:account_name, :name, :region, :role, :dns_suffix, :otel_otlp_destination, :capacity_reservation)
   OtelOtlpDestinationConfig = Struct.new(:otlp_data_endpoint, :otlp_arrow_endpoint, :logs_endpoint, :metrics_endpoint, :auth_audience)
+  # Standing AWS capacity reservation (ODCR) config for a location. `enabled` defaults to
+  # false, so a location only gets a Prog::CapacityReservation strand when opted in.
+  CapacityReservationConfig = Struct.new(:enabled, :instance_families, :additional_capacity, :enable_all_families, :allowed_capacity_decrease, :reconcile_interval, :remove_orphaned_reservations, keyword_init: true)
   # pg_amis will look like
   # pg_amis:
   #   us-east-2:
@@ -319,6 +348,11 @@ module UbicloudSetup
       loc = loc.transform_keys(&:to_sym)
       if (dest = loc[:otel_otlp_destination])
         loc[:otel_otlp_destination] = OtelOtlpDestinationConfig.new(**dest.transform_keys(&:to_sym).slice(*OtelOtlpDestinationConfig.members))
+      end
+      if (cr = loc[:capacity_reservation])
+        # Only the top-level keys become struct fields; instance_families keeps its raw
+        # string keys (family => constraint), which is what Prog::CapacityReservation wants.
+        loc[:capacity_reservation] = CapacityReservationConfig.new(**cr.transform_keys(&:to_sym).slice(*CapacityReservationConfig.members))
       end
       LocationConfig.new(**loc.slice(*LocationConfig.members))
     end
@@ -384,6 +418,7 @@ module UbicloudSetup
 
     setup_config.locations.each do |location|
       add_location(location)
+      setup_capacity_reservation(location)
       # Get DNS AMI for this region (x64 arch required)
       dns_ami = setup_config.dns_server_amis.dig(location.region, :arch_x64)
       fail "DNS AMI not configured for region #{location.region}" if dns_ami.nil? || dns_ami.empty?

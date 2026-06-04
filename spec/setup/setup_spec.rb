@@ -590,6 +590,48 @@ RSpec.describe "UbicloudSetup" do
       .to_return(status: 200, body:, headers: {"Content-Type" => "application/json"})
   end
 
+  describe "setup_capacity_reservation" do
+    let(:cr_loc) do
+      Location.create(name: "us-west-2", ui_name: "cr-acct", display_name: "cr", provider: "aws", visible: true, project_id: nil)
+    end
+
+    def cr_config(enabled:, additional_capacity: 0.2)
+      UbicloudSetup::LocationConfig.new(
+        account_name: "cr-acct", name: "cr", region: "us-west-2", role: "role", dns_suffix: "c0",
+        capacity_reservation: UbicloudSetup::CapacityReservationConfig.new(
+          enabled:, enable_all_families: true, additional_capacity:,
+        ),
+      )
+    end
+
+    it "pauses an existing strand when the location is disabled, leaving it live and its ODCRs in place" do
+      strand = Prog::CapacityReservation.assemble(location_id: cr_loc.id, instance_families: {}, additional_capacity: 0.2, enable_all_families: true)
+      UbicloudSetup.setup_capacity_reservation(cr_config(enabled: false))
+      expect(Semaphore.where(strand_id: strand.id, name: "pause").count).to eq(1)
+      expect(Strand[strand.id]).not_to be_nil
+      expect(Strand[strand.id].exitval).to be_nil
+    end
+
+    it "does not add a second pause when the disabled strand is already paused (idempotent across deploys)" do
+      strand = Prog::CapacityReservation.assemble(location_id: cr_loc.id, instance_families: {}, additional_capacity: 0.2, enable_all_families: true)
+      Semaphore.incr(strand.id, "pause")
+      UbicloudSetup.setup_capacity_reservation(cr_config(enabled: false))
+      expect(Semaphore.where(strand_id: strand.id, name: "pause").count).to eq(1)
+    end
+
+    it "resumes (clears pause) a previously-disabled location on re-enable and updates its inputs" do
+      LocationCredentialAws.create_with_id(cr_loc.id, access_key: nil, secret_key: nil, assume_role: "role")
+      strand = Prog::CapacityReservation.assemble(location_id: cr_loc.id, instance_families: {}, additional_capacity: 0.2, enable_all_families: true)
+      Semaphore.incr(strand.id, "pause")
+      expect(Semaphore.where(strand_id: strand.id, name: "pause").count).to eq(1)
+
+      UbicloudSetup.setup_capacity_reservation(cr_config(enabled: true, additional_capacity: 0.45))
+
+      expect(Semaphore.where(strand_id: strand.id, name: "pause").count).to eq(0)
+      expect(strand.reload.stack.first["additional_capacity"]).to eq(0.45)
+    end
+  end
+
   describe "run_ch_ubi e2e" do
     let(:project_id) { UBID.generate UBID::TYPE_PROJECT }
     let(:project) do
@@ -622,6 +664,13 @@ RSpec.describe "UbicloudSetup" do
         auth_audience: "https://otel.example.com",
       )
       expect(OtelOtlpDestination[us_east_1.id]).to be_nil
+
+      # us-west-2 has capacity_reservation.enabled, us-east-1 does not.
+      cr_strand = Prog::CapacityReservation.live_strand(us_west_2.id)
+      expect(cr_strand).not_to be_nil
+      expect(cr_strand.stack.first).to include("enable_all_families" => true, "additional_capacity" => 0.2, "allowed_capacity_decrease" => 0.3,
+        "reconcile_interval" => 600, "remove_orphaned_reservations" => true)
+      expect(Prog::CapacityReservation.live_strand(us_east_1.id)).to be_nil
     end
 
     it "fails on missing DNS Suffix" do

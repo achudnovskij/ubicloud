@@ -95,10 +95,64 @@
         },
         "dns_suffix": { "type": "string", "minLength": 1 },
         "otel_otlp_destination": { "$ref": "#/definitions/OtelOtlpDestinationConfig" },
+        "capacity_reservation": { "$ref": "#/definitions/CapacityReservationConfig" },
         "otel_otlp_export_endpoint": {
           "type": ["string", "null"],
           "format": "uri",
           "description": "Deprecated. Retained for backward compatibility; ignored by setup.rb. Use otel_otlp_destination instead."
+        }
+      }
+    },
+    "CapacityReservationConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "description": "Standing AWS ODCR config; only applied when enabled is true.",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "When false (default), no capacity reservation strand is created for the location."
+        },
+        "additional_capacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Buffer fraction added on top of current usage (floored at +3 per instance type). Max mirrors Prog::CapacityReservation::MAX_ADDITIONAL_CAPACITY."
+        },
+        "enable_all_families": {
+          "type": "boolean",
+          "description": "Buffer every instance type currently in use; instance_families, if also set, adds its resolved sizes on top."
+        },
+        "allowed_capacity_decrease": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Buffer fraction to retain over current usage when shrinking (must be >= additional_capacity); omit/null means never shrink."
+        },
+        "reconcile_interval": {
+          "type": "integer",
+          "minimum": 60,
+          "description": "Seconds between natural re-measure passes. Defaults to 300; floored at 60 to avoid hammering the AWS APIs."
+        },
+        "remove_orphaned_reservations": {
+          "type": "boolean",
+          "description": "If true, cancel managed ODCRs for instance types no longer eligible (e.g. removed from the config or a minimum_provisioned_* size that stopped being provisioned). When NOTHING is eligible it cancels ALL of the location's managed ODCRs (full wind-down), except during the InsufficientAZs safety path. Default false."
+        },
+        "instance_families": {
+          "type": "object",
+          "description": "family -> constraint (exactly one of minimum_cpu / minimum_storage / sizes / minimum_provisioned_cpu / minimum_provisioned_storage). The bare minimum_* and sizes cover all matching catalog sizes (pre-warming unused ones); the minimum_provisioned_* variants cover only matching sizes currently in use.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "maxProperties": 1,
+            "properties": {
+              "minimum_cpu": { "type": "integer", "minimum": 1 },
+              "minimum_storage": { "type": "integer", "minimum": 1 },
+              "minimum_provisioned_cpu": { "type": "integer", "minimum": 1 },
+              "minimum_provisioned_storage": { "type": "integer", "minimum": 1 },
+              "sizes": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+            }
+          }
         }
       }
     },
