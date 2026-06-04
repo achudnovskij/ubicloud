@@ -669,7 +669,7 @@ RSpec.describe "UbicloudSetup" do
       cr_strand = Prog::CapacityReservation.live_strand(us_west_2.id)
       expect(cr_strand).not_to be_nil
       expect(cr_strand.stack.first).to include("enable_all_families" => true, "additional_capacity" => 0.2, "allowed_capacity_decrease" => 0.3,
-        "reconcile_interval" => 600, "remove_orphaned_reservations" => true)
+        "reconcile_interval" => 600, "remove_orphaned_reservations" => true, "min_available_az_insufficient_action" => "WARN")
       expect(Prog::CapacityReservation.live_strand(us_east_1.id)).to be_nil
     end
 

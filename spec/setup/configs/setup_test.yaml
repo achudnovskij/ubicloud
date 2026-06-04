@@ -14,6 +14,7 @@ locations:
       allowed_capacity_decrease: 0.3
       reconcile_interval: 600
       remove_orphaned_reservations: true
+      min_available_az_insufficient_action: WARN
     otel_otlp_destination:
       otlp_data_endpoint: https://otel-data.example.com:4317
       otlp_arrow_endpoint: https://otel-arrow.example.com:4317

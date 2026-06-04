@@ -170,6 +170,7 @@ module UbicloudSetup
         allowed_capacity_decrease: cr.allowed_capacity_decrease,
         reconcile_interval: cr.reconcile_interval || Prog::CapacityReservation::RECONCILE_INTERVAL_SECONDS,
         remove_orphaned_reservations: cr.remove_orphaned_reservations || false,
+        min_available_az_insufficient_action: cr.min_available_az_insufficient_action || "PAGE",
         wait: true,
       )
       strand.load.decr_pause # resume if a prior disable paused it
@@ -303,7 +304,7 @@ module UbicloudSetup
   OtelOtlpDestinationConfig = Struct.new(:otlp_data_endpoint, :otlp_arrow_endpoint, :logs_endpoint, :metrics_endpoint, :auth_audience)
   # Standing AWS capacity reservation (ODCR) config for a location. `enabled` defaults to
   # false, so a location only gets a Prog::CapacityReservation strand when opted in.
-  CapacityReservationConfig = Struct.new(:enabled, :instance_families, :additional_capacity, :enable_all_families, :allowed_capacity_decrease, :reconcile_interval, :remove_orphaned_reservations, keyword_init: true)
+  CapacityReservationConfig = Struct.new(:enabled, :instance_families, :additional_capacity, :enable_all_families, :allowed_capacity_decrease, :reconcile_interval, :remove_orphaned_reservations, :min_available_az_insufficient_action, keyword_init: true)
   # pg_amis will look like
   # pg_amis:
   #   us-east-2:

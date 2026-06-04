@@ -137,6 +137,11 @@
           "type": "boolean",
           "description": "If true, cancel managed ODCRs for instance types no longer eligible (e.g. removed from the config or a minimum_provisioned_* size that stopped being provisioned). When NOTHING is eligible it cancels ALL of the location's managed ODCRs (full wind-down), except during the InsufficientAZs safety path. Default false."
         },
+        "min_available_az_insufficient_action": {
+          "type": "string",
+          "enum": ["WARN", "PAGE"],
+          "description": "What to do when AWS offers a type (or the whole location) in fewer than the required 3 AZs: PAGE raises an incident, WARN just logs. Default PAGE; set WARN where a needed family (e.g. Graviton4 8gd) is genuinely offered in < 3 AZs in the region."
+        },
         "instance_families": {
           "type": "object",
           "description": "family -> constraint (exactly one of minimum_cpu / minimum_storage / sizes / minimum_provisioned_cpu / minimum_provisioned_storage). The bare minimum_* and sizes cover all matching catalog sizes (pre-warming unused ones); the minimum_provisioned_* variants cover only matching sizes currently in use.",
