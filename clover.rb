@@ -77,9 +77,13 @@ class Clover < Roda
   end
 
   plugin :symbol_matchers
-  symbol_matcher(:ubid_uuid, /([a-tv-z0-9]{26})/) do |s|
+
+  symbol_matcher(:object_name, /([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)/, segment: true)
+
+  symbol_matcher(:ubid_uuid, /([a-tv-z0-9]{26})/, segment: true) do |s|
     UBID.to_uuid(s)
   end
+
   [
     Firewall,
     [GithubInstallation, /([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/],
@@ -93,14 +97,21 @@ class Clover < Roda
     SshPublicKey,
     Vm,
   ].each do |model, regexp|
-    sym = :"#{model.table_name}_ubid_uuid"
-    symbol_matcher(sym, /(#{model.ubid_type}[a-tv-z0-9]{24})/) do |ubid|
+    ubid_sym = :"#{model.table_name}_ubid_uuid"
+    symbol_matcher(ubid_sym, /(#{model.ubid_type}[a-tv-z0-9]{24})/, segment: true) do |ubid|
       if (uuid = UBID.to_uuid(ubid))
         # yield nil as first element to differentiate case where name matches
         [nil, uuid]
       end
     end
-    const_set(:"#{model.table_name.upcase}_NAME_OR_UBID", [sym, regexp || /([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)/])
+
+    if regexp
+      name_sym = :"#{model.table_name}_name"
+      symbol_matcher(name_sym, regexp, segment: true)
+    else
+      name_sym = :object_name
+    end
+    const_set(:"#{model.table_name.upcase}_NAME_OR_UBID", [ubid_sym, name_sym])
   end
 
   plugin :response_content_type,
@@ -153,7 +164,7 @@ class Clover < Roda
         :api
       elsif host.start_with?("admin.")
         :admin
-      elsif request.path_info.start_with?("/runtime")
+      elsif request.path_info.start_with?("/runtime/")
         :runtime
       end
     end
@@ -279,7 +290,7 @@ class Clover < Roda
       Clog.emit("route exception", Util.exception_to_hash(e))
 
       code = 500
-      type = "UnexceptedError"
+      type = "UnexpectedError"
       message = "Sorry, we couldn’t process your request because of an unexpected error."
     end
 
@@ -362,6 +373,8 @@ class Clover < Roda
     title_instance_variable :@page_title
     check_csrf? false
     base_url Config.base_url
+
+    uses_instance_variables(:@removed_webauthn_credential_name, :@previous_login)
 
     audit_logging_table :account_authentication_audit_log
     audit_log_metadata do |action|
@@ -890,6 +903,34 @@ class Clover < Roda
 
   # :nocov:
   if Config.test?
+    hash_branch(:webhook_prefix, "test-ssh-access") do |r|
+      response = +""
+
+      response << (defined?(Net::SSH::Connection) ? "defined-" : "undefined-")
+
+      # Use absolute constant reference to work around model hiding (only acceptable
+      # as this is test-only code)
+      sshable = ::Sshable.new(host: "127.1.2.3")
+
+      begin
+        sshable.start_fresh_session
+      rescue NameError => e
+        response << e.message << "-"
+      else
+        raise
+      end
+
+      begin
+        sshable.cmd("true")
+      rescue RuntimeError => e
+        response << e.message
+      else
+        raise
+      end
+
+      response
+    end
+
     # :nocov:
     hash_branch(:webhook_prefix, "test-error") do |r|
       raise(typecast_params.str("message") || "test error")
@@ -913,9 +954,24 @@ class Clover < Roda
       end
 
       r.post "bad" do
-        @project = Account.first.projects.first
-        audit_log(@project, "bad_action")
+        audit_log(nil, "bad_action", project_id: nil)
       end
+    end
+
+    hash_branch(:webhook_prefix, "hidden-model-access") do |r|
+      begin
+        GpuPartition
+      rescue DirectModelAccess => e
+        e.message
+      end.to_s
+    end
+
+    hash_branch(:webhook_prefix, "hidden-model-method-call") do |r|
+      begin
+        Account.inspect
+      rescue DirectModelAccess => e
+        e.message
+      end.to_s
     end
 
     hash_branch("test-no-authorization-needed") do |r|

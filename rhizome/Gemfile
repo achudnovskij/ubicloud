@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
-# Use __dir__ to make sure that
-# `BUNDLE_GEMFILE=rhizome/Gemfile bundle install` works from repository root,
-# as that is what rhizome CI uses.
+# Only used by hosts
 
-# Load Gemfiles
-Dir.glob("*/Gemfile", base: __dir__) do |file|
-  instance_eval File.read(File.join(__dir__, file))
+source "https://rubygems.org"
+
+gem "netaddr"
+gem "base64"
+
+group :test do
+  gem "rspec"
 end

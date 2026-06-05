@@ -39,6 +39,11 @@ class Vm < Sequel::Model
   plugin :association_dependencies, sshable: :destroy, assigned_vm_address: :destroy, vm_storage_volumes: :destroy, load_balancer_vm: :destroy, init_script: :destroy
 
   dataset_module Pagination
+  dataset_module do
+    def unattached_to_load_balancer(project)
+      exclude(Sequel[:vm][:id] => LoadBalancerVm.where(vm_id: project.vms_dataset.select(:id)).select(:vm_id))
+    end
+  end
 
   plugin ResourceMethods, redacted_columns: :public_key
   plugin ProviderDispatcher, __FILE__
@@ -159,6 +164,10 @@ class Vm < Sequel::Model
         (cpu_percent_limit.nil? || it.cpu_percent_limit == cpu_percent_limit)
     }
     vm_size.name
+  end
+
+  def display_boot_image
+    Option::BootImages.find { |bi| bi.name == boot_image }&.display_name || boot_image
   end
 
   # Various names in linux, like interface names, are obliged to be
