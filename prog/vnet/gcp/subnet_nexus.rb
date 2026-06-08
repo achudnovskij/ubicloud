@@ -5,6 +5,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   include GcpFirewallPolicy
 
   subject_is :private_subnet
+  frame_accessor :tag_key_name, :subnet_tag_value_name, :pending_tag_key_crm_op, :pending_tag_value_crm_op
 
   CrmOperationError = GcpLro::CrmOperationError
 
@@ -28,8 +29,32 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   label def start
     register_deadline("wait", 5 * 60)
 
-    gcp_vpc = GcpVpc.where(project_id: private_subnet.project_id, location_id: private_subnet.location_id).first
-    gcp_vpc ||= Prog::Vnet::Gcp::VpcNexus.assemble(private_subnet.project_id, private_subnet.location_id).subject
+    gcp_vpc = private_subnet.gcp_vpc ||
+      if private_subnet.project.gcp_dedicated_subnet_vpcs
+        # Look up by dedicated_for_subnet_id (not the join row) so
+        # a label re-entry that left the assemble committed but the
+        # join row not yet inserted can still find its dedicated VPC
+        # instead of leaking a second one.
+        GcpVpc.where(dedicated_for_subnet_id: private_subnet.id).first ||
+          Prog::Vnet::Gcp::VpcNexus.assemble(
+            private_subnet.project_id,
+            private_subnet.location_id,
+            dedicated_for_subnet_id: private_subnet.id,
+          ).subject
+      else
+        # The dedicated_for_subnet_id: nil filter is load-bearing:
+        # without it, once the project has any dedicated VPCs, this
+        # lookup could grab another subnet's dedicated row.
+        GcpVpc.where(
+          project_id: private_subnet.project_id,
+          location_id: private_subnet.location_id,
+          dedicated_for_subnet_id: nil,
+        ).first ||
+          Prog::Vnet::Gcp::VpcNexus.assemble(
+            private_subnet.project_id,
+            private_subnet.location_id,
+          ).subject
+      end
     unless private_subnet.gcp_vpc
       gcp_vpc.add_private_subnet(private_subnet)
       # Firewalls attached to this subnet (or to VMs whose NICs live in
@@ -91,23 +116,19 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   end
 
   label def create_tag_resources
-    tag_key_name = frame["tag_key_name"] || ensure_tag_key
-    update_stack({"tag_key_name" => tag_key_name}) unless frame["tag_key_name"]
+    self.tag_key_name ||= ensure_tag_key
     # Emit on every entry (including frame re-reads) so a strand that
     # crashed between creating the tag key and the next nap still surfaces
     # the name in foreman.log. The e2e cleanup grep applies sort -u.
     Clog.emit("GCP tag key created", {gcp_tag_key_created: tag_key_name})
 
-    subnet_tag_value_name = ensure_tag_value(tag_key_name, TAG_VALUE)
-    update_stack({"subnet_tag_value_name" => subnet_tag_value_name})
+    self.subnet_tag_value_name = ensure_tag_value(tag_key_name, TAG_VALUE)
     Clog.emit("GCP tag value created", {gcp_tag_value_created: subnet_tag_value_name})
     hop_create_subnet_allow_rules
   end
 
   label def create_subnet_allow_rules
     allocate_subnet_firewall_priority unless private_subnet.firewall_priority
-
-    subnet_tag_value_name = frame["subnet_tag_value_name"]
 
     # Allow same-subnet IPv4 egress (overrides the VPC-wide deny-egress)
     ensure_firewall_policy_rule(
@@ -202,7 +223,28 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   end
 
   label def finish_destroy
-    gcp_vpc = private_subnet.gcp_vpc(&:for_no_key_update)
+    # Use the join row when present; once it is dropped (below or via the
+    # cascade from gcp_vpc), look the dedicated VPC up by its FK directly
+    # so we still see it on a re-entry that happened after the join row
+    # was removed but before the gcp_vpc row was deleted.
+    gcp_vpc = private_subnet.gcp_vpc(&:for_no_key_update) ||
+      GcpVpc.where(dedicated_for_subnet_id: private_subnet.id).first
+
+    if gcp_vpc&.dedicated_for_subnet_id == private_subnet.id
+      # Dedicated VPC: the cloud VPC and the subnet are 1:1, so the
+      # cloud VPC (and its DB row) must die before private_subnet.destroy
+      # runs -- the no-action FK gcp_vpc.dedicated_for_subnet_id would
+      # otherwise refuse the subnet delete. Drop the join row first so
+      # VpcNexus#destroy's "no private subnets" guard does not deadlock
+      # us, then nudge VpcNexus to start its destroy. We nap here until
+      # finalize_destroy in VpcNexus deletes the gcp_vpc row; on the
+      # next entry the lookup above returns nil and we fall through to
+      # the standard subnet-delete path.
+      DB[:private_subnet_gcp_vpc].where(private_subnet_id: private_subnet.id).delete
+      gcp_vpc.incr_destroy
+      nap 5
+    end
+
     private_subnet.destroy
 
     if gcp_vpc && gcp_vpc.private_subnets_dataset.empty?
@@ -324,7 +366,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
 
   def ensure_tag_key
     ensure_crm_resource(
-      pending_key: "pending_tag_key_crm_op",
+      pending_key: :pending_tag_key_crm_op,
       label: "Tag key",
       short_name: tag_key_short_name,
       lookup: -> { lookup_tag_key&.name },
@@ -349,7 +391,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
 
   def ensure_tag_value(parent_tag_key_name, short_name)
     ensure_crm_resource(
-      pending_key: "pending_tag_value_crm_op",
+      pending_key: :pending_tag_value_crm_op,
       label: "Tag value",
       short_name:,
       lookup: -> { lookup_tag_value_name(parent_tag_key_name, short_name) },
@@ -367,12 +409,12 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   # The create block is called to start the LRO; `lookup` is a proc that
   # returns the resource name (string) on fallback lookup or nil.
   def ensure_crm_resource(pending_key:, label:, short_name:, lookup:)
-    if (pending = frame[pending_key])
+    if (pending = send(pending_key))
       op = credential.crm_client.get_operation(pending)
       unless op.done?
         nap 5
       end
-      update_stack({pending_key => nil})
+      send(:"#{pending_key}=", nil)
       raise CrmOperationError.new(pending, op.error) if op.error
       name = op.response&.dig("name")
       return name if name
@@ -382,7 +424,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
 
     op = yield
     unless op.done?
-      update_stack({pending_key => op.name})
+      send(:"#{pending_key}=", op.name)
       nap 5
     end
     raise CrmOperationError.new(op.name, op.error) if op.error

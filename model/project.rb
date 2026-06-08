@@ -256,22 +256,22 @@ class Project < Sequel::Model
     :postgres_aws_use_different_azs_for_standbys,
     :postgres_instance_type_fallback,
     :cache_proxy_download_url,
-    :overwrite_runner_apt_sources,
   )
 end
 
 # Table: project
 # Columns:
-#  id              | uuid                     | PRIMARY KEY
-#  name            | text                     | NOT NULL
-#  visible         | boolean                  | NOT NULL DEFAULT true
-#  billing_info_id | uuid                     |
-#  credit          | numeric                  | NOT NULL DEFAULT 0
-#  discount        | integer                  | NOT NULL DEFAULT 0
-#  created_at      | timestamp with time zone | NOT NULL DEFAULT now()
-#  feature_flags   | jsonb                    | NOT NULL DEFAULT '{}'::jsonb
-#  billable        | boolean                  | NOT NULL DEFAULT true
-#  reputation      | text                     | NOT NULL DEFAULT 'new'::text
+#  id                        | uuid                     | PRIMARY KEY
+#  name                      | text                     | NOT NULL
+#  visible                   | boolean                  | NOT NULL DEFAULT true
+#  billing_info_id           | uuid                     |
+#  credit                    | numeric                  | NOT NULL DEFAULT 0
+#  discount                  | integer                  | NOT NULL DEFAULT 0
+#  created_at                | timestamp with time zone | NOT NULL DEFAULT now()
+#  feature_flags             | jsonb                    | NOT NULL DEFAULT '{}'::jsonb
+#  billable                  | boolean                  | NOT NULL DEFAULT true
+#  reputation                | text                     | NOT NULL DEFAULT 'new'::text
+#  gcp_dedicated_subnet_vpcs | boolean                  | NOT NULL DEFAULT false
 # Indexes:
 #  project_pkey                      | PRIMARY KEY btree (id)
 #  project_right(id::text, 10)_index | UNIQUE btree ("right"(id::text, 10))

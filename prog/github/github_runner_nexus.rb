@@ -121,13 +121,7 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
     end
     billed_vm_size += "-arm" if arch == "arm64"
     github_runner.update(billed_vm_size:)
-    # We continue to charge existing customers with the old rates until June 1st
-    active_at = if Time.now < Time.utc(2026, 6) && installation.created_at < Time.utc(2026, 5)
-      Time.utc(2026, 4, 30)
-    else
-      Time.now
-    end
-    rate_id = BillingRate.from_resource_properties("GitHubRunnerMinutes", billed_vm_size, "global", false, active_at)["id"]
+    rate_id = BillingRate.from_resource_properties("GitHubRunnerMinutes", billed_vm_size, "global")["id"]
 
     retries = 0
     begin
@@ -420,17 +414,6 @@ class Prog::Github::GithubRunnerNexus < Prog::Base
         curl -fsSL -o /tmp/cache-proxy.tar.gz :cache_proxy_url
         sudo tar xzf /tmp/cache-proxy.tar.gz -C /usr/local/share/cache-proxy
         sudo systemctl start cache-proxy.service
-      COMMAND
-    end
-
-    if project.get_ff_overwrite_runner_apt_sources
-      command << NetSsh.command(<<~COMMAND)
-        sudo tee /etc/apt/apt-mirrors.txt > /dev/null <<MIRRORS
-        https://mirror.hetzner.com/ubuntu/packages/	priority:1
-        https://mirror.hetzner.com/ubuntu/security/	priority:2
-        https://archive.ubuntu.com/ubuntu/	priority:3
-        https://security.ubuntu.com/ubuntu/	priority:4
-        MIRRORS
       COMMAND
     end
 

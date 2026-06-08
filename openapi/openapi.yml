@@ -2455,6 +2455,7 @@ paths:
           $ref: '#/components/responses/Error'
       tags:
         - Postgres Database
+<<<<<<< HEAD
   /project/{project_id}/postgres-location:
     parameters:
       - $ref: '#/components/parameters/project_id'
@@ -2489,6 +2490,26 @@ paths:
           $ref: '#/components/responses/Error'
       tags:
         - Postgres Location
+=======
+  /project/{project_id}/postgres/capabilities:
+    parameters:
+      - $ref: '#/components/parameters/project_id'
+    get:
+      operationId: getPostgresCapabilities
+      summary: Get available PostgreSQL provisioning options
+      description: Returns a tree of valid option combinations for creating PostgreSQL databases, along with metadata describing each option value. The tree encodes dependency chains (e.g. which VM families are available per location, which storage sizes are valid per VM size).
+      responses:
+        '200':
+          description: PostgreSQL capabilities tree and metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostgresCapabilities'
+        default:
+          $ref: '#/components/responses/Error'
+      tags:
+        - Postgres Database
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
   /project/{project_id}/private-location:
     parameters:
       - $ref: '#/components/parameters/project_id'
@@ -4114,6 +4135,7 @@ components:
         - name
         - node_count
         - node_size
+<<<<<<< HEAD
     PostgresLocation:
       type: object
       properties:
@@ -4231,6 +4253,96 @@ components:
         - vcpu
         - memory_gib
         - storage_size_gib
+=======
+    PostgresCapabilities:
+      description: 'Tree of valid option combinations and metadata for each option value. The option_tree encodes parent-child dependencies: traverse from flavor -> location -> family -> size -> storage_size -> ha_type (with version branching from flavor). Only combinations present in the tree are valid for provisioning.'
+      type: object
+      properties:
+        option_tree:
+          description: Nested object where each level maps option values to their valid children.
+          type: object
+          additionalProperties: true
+        metadata:
+          description: Display info for option values referenced in the tree
+          type: object
+          additionalProperties: false
+          properties:
+            flavor:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                properties:
+                  display_name:
+                    type: string
+                required:
+                  - display_name
+            location:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                properties:
+                  display_name:
+                    type: string
+                  ui_name:
+                    type: string
+                  provider:
+                    type: string
+                required:
+                  - display_name
+                  - ui_name
+                  - provider
+            family:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                properties:
+                  display_name:
+                    type: string
+                  category:
+                    type: string
+                required:
+                  - display_name
+                  - category
+            size:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                properties:
+                  vcpu:
+                    type: integer
+                  memory_gib:
+                    type: integer
+                required:
+                  - vcpu
+                  - memory_gib
+            ha_type:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: false
+                properties:
+                  display_name:
+                    type: string
+                  standby_count:
+                    type: integer
+                required:
+                  - display_name
+                  - standby_count
+          required:
+            - flavor
+            - location
+            - family
+            - size
+            - ha_type
+      additionalProperties: false
+      required:
+        - option_tree
+        - metadata
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
   responses:
     AuditLogs:
       description: A list of audit log entries

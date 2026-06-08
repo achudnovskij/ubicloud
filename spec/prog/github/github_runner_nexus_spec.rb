@@ -287,35 +287,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
         4.times { nx.update_billing_record }
       }.to raise_error(Sequel::Postgres::ExclusionConstraintViolation)
     end
-
-    it "uses the legacy billing rate for installations created before May 1, 2026 when run before June 1, 2026" do
-      runner.update(ready_at: now - 5 * 60)
-      nx.update_billing_record
-
-      br = BillingRecord[resource_id: project.id]
-      expect(br.billing_rate_id).to eq("d772d0aa-0b40-4b7a-aceb-72f6211f7cad")
-    end
-
-    it "uses the new billing rate for installations created on/after May 1, 2026" do
-      installation.update(created_at: Time.utc(2026, 5, 1))
-      may_now = Time.utc(2026, 5, 15)
-      allow(Time).to receive(:now).and_return(may_now)
-      runner.update(created_at: may_now, ready_at: may_now - 5 * 60)
-      nx.update_billing_record
-
-      br = BillingRecord[resource_id: project.id]
-      expect(br.billing_rate_id).to eq("12c84463-3456-4dcd-9873-a7a32a15709c")
-    end
-
-    it "uses the new billing rate for legacy installations after June 1, 2026" do
-      june_now = Time.utc(2026, 6, 15)
-      allow(Time).to receive(:now).and_return(june_now)
-      runner.update(ready_at: june_now - 5 * 60)
-      nx.update_billing_record
-
-      br = BillingRecord[resource_id: project.id]
-      expect(br.billing_rate_id).to eq("12c84463-3456-4dcd-9873-a7a32a15709c")
-    end
   end
 
   describe "#before_destroy" do
@@ -651,28 +622,6 @@ RSpec.describe Prog::Github::GithubRunnerNexus do
         jq '. += ['\\{\\"group\\":\\"Ubicloud\\ Managed\\ Runner\\",\\"detail\\":\\"Name:\\ #{runner.ubid}\\\\nLabel:\\ ubicloud-standard-4\\\\nVM\\ Family:\\ standard\\\\nArch:\\ x64\\\\nImage:\\ github-ubuntu-2204\\\\nVM\\ Host:\\ #{vm.vm_host.ubid}\\\\nVM\\ Pool:\\ \\\\nLocation:\\ hetzner-fsn1\\\\nDatacenter:\\ FSN1-DC8\\\\nProject:\\ #{project.ubid}\\\\nConsole\\ URL:\\ http://localhost:9292/project/#{project.ubid}/github\\"\\}']' /imagegeneration/imagedata.json | sudo -u runner tee /home/runner/actions-runner/.setup_info > /dev/null
         echo "UBICLOUD_RUNTIME_TOKEN="my_token"
         UBICLOUD_CACHE_URL="http://localhost:9292"/runtime/github/" | sudo tee -a /etc/environment > /dev/null
-      COMMAND
-
-      expect { nx.setup_environment }.to hop("register_runner")
-    end
-
-    it "hops to register_runner with overwriting apt mirrors" do
-      expect(vm).to receive(:runtime_token).and_return("my_token")
-      installation.update(use_docker_mirror: false, cache_enabled: false)
-      project.set_ff_overwrite_runner_apt_sources(true)
-      expect(vm.sshable).to receive(:_cmd).with("bash", stdin: <<~COMMAND)
-        set -ueo pipefail
-        echo "image version: $ImageVersion"
-        sudo usermod -a -G sudo,adm runneradmin
-        jq '. += ['\\{\\"group\\":\\"Ubicloud\\ Managed\\ Runner\\",\\"detail\\":\\"Name:\\ #{runner.ubid}\\\\nLabel:\\ ubicloud-standard-4\\\\nVM\\ Family:\\ standard\\\\nArch:\\ x64\\\\nImage:\\ github-ubuntu-2204\\\\nVM\\ Host:\\ #{vm.vm_host.ubid}\\\\nVM\\ Pool:\\ \\\\nLocation:\\ hetzner-fsn1\\\\nDatacenter:\\ FSN1-DC8\\\\nProject:\\ #{project.ubid}\\\\nConsole\\ URL:\\ http://localhost:9292/project/#{project.ubid}/github\\"\\}']' /imagegeneration/imagedata.json | sudo -u runner tee /home/runner/actions-runner/.setup_info > /dev/null
-        echo "UBICLOUD_RUNTIME_TOKEN="my_token"
-        UBICLOUD_CACHE_URL="http://localhost:9292"/runtime/github/" | sudo tee -a /etc/environment > /dev/null
-        sudo tee /etc/apt/apt-mirrors.txt > /dev/null <<MIRRORS
-        https://mirror.hetzner.com/ubuntu/packages/\tpriority:1
-        https://mirror.hetzner.com/ubuntu/security/\tpriority:2
-        https://archive.ubuntu.com/ubuntu/\tpriority:3
-        https://security.ubuntu.com/ubuntu/\tpriority:4
-        MIRRORS
       COMMAND
 
       expect { nx.setup_environment }.to hop("register_runner")

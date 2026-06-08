@@ -11,6 +11,7 @@ require "yaml"
 # Usage: ruby bin/generate_instance_availability.rb <output_file_path>
 #
 class InstanceAvailabilityGenerator
+<<<<<<< HEAD
   # Families enabled per-project but intentionally omitted from the YAML so they
   # don't surface in the postgres-location API consumed by external clients.
   HIDDEN_FROM_LOCATIONS_API = %w[m7gd r7gd].freeze
@@ -19,6 +20,10 @@ class InstanceAvailabilityGenerator
 
   # Regions to skip (e.g. opt-in regions we don't operate in)
   EXCLUDED_REGIONS = %w[me-south-1 me-central-1].freeze
+=======
+  # Instance families we're interested in
+  INSTANCE_FAMILIES = Option::AWS_FAMILY_OPTIONS
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
 
   def initialize
     @data = {"providers" => {"aws" => {"locations" => {}}}}
@@ -31,6 +36,7 @@ class InstanceAvailabilityGenerator
     regions = fetch_regions
     log "Found #{regions.size} regions: #{regions.join(", ")}"
 
+<<<<<<< HEAD
     env_parallel = ENV["PARALLEL_REGIONS_COUNT"]
     parallel_count = (env_parallel || "10").to_i
     parallel_count = 1 if parallel_count < 1
@@ -39,6 +45,14 @@ class InstanceAvailabilityGenerator
 
     queue = Queue.new
     regions.each { |r| queue << r }
+=======
+    parallel_count = Integer(ENV.fetch("PARALLEL_REGIONS_COUNT", "10"), 10)
+    parallel_count = 1 if parallel_count < 1
+    log "\nFetching instance types from #{regions.size} regions (#{parallel_count} in parallel)..."
+
+    queue = Queue.new
+    regions.each { queue << it }
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
 
     workers = Array.new(parallel_count) do
       Thread.new do
@@ -46,6 +60,10 @@ class InstanceAvailabilityGenerator
           region = begin
             queue.pop(true)
           rescue ThreadError
+<<<<<<< HEAD
+=======
+            # queue drained
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
             break
           end
           log "Processing region: #{region}"
@@ -55,21 +73,34 @@ class InstanceAvailabilityGenerator
     end
     workers.each(&:join)
 
+<<<<<<< HEAD
+=======
+    # Canonical region order; parallel fetch inserts out of order
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
     @data["providers"]["aws"]["locations"] = @data["providers"]["aws"]["locations"].sort.to_h
     @data
   end
 
+<<<<<<< HEAD
+=======
+  private
+
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
   def log(msg)
     @log_mutex.synchronize { puts msg }
   end
 
+<<<<<<< HEAD
   private
 
+=======
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
   def fetch_regions
     # Use us-east-1 as the default region to query for all available regions
     client = Aws::EC2::Client.new(region: "us-east-1")
 
     response = client.describe_regions
+<<<<<<< HEAD
     all_regions = response.regions.map(&:region_name).sort
     excluded = all_regions & EXCLUDED_REGIONS
     log "Excluding regions: #{excluded.join(", ")}" unless excluded.empty?
@@ -77,6 +108,12 @@ class InstanceAvailabilityGenerator
   rescue Aws::EC2::Errors::ServiceError => e
     puts "Error fetching regions: #{e.message}"
     puts "Falling back to default regions"
+=======
+    response.regions.map(&:region_name).sort
+  rescue Aws::EC2::Errors::ServiceError => e
+    log "Error fetching regions: #{e.message}"
+    log "Falling back to default regions"
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
     ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1", "ap-northeast-1"]
   end
 
@@ -160,7 +197,11 @@ if __FILE__ == $0
   if output_file.nil? || output_file.empty?
     puts "Usage: #{$0} <output_file_path>"
     puts ""
+<<<<<<< HEAD
     puts "Example: #{$0} config/postgres_instance_availability.yaml"
+=======
+    puts "Example: #{$0} config/instance_availability.yml"
+>>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
     puts ""
     exit 1
   end
