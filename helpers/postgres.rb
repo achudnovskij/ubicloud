@@ -108,11 +108,13 @@ class Clover
     end
   end
 
-<<<<<<< HEAD
+  # Postgres Locations API
   PostgresLocation = Struct.new(:location, :available_postgres_versions, :available_vm_families)
   def vm_families_for_project(project)
     PostgresResource.vm_families_for_project(@project)
-=======
+  end
+
+  # Capabilities API
   def postgres_option_metadata(option_tree)
     valid = OptionTreeGenerator.collect_valid_values(option_tree)
     {
@@ -122,7 +124,6 @@ class Clover
       size: Option::POSTGRES_SIZE_OPTIONS.slice(*valid["size"]).transform_values { |v| {vcpu: v.vcpu_count, memory_gib: v.memory_gib} },
       ha_type: Option::POSTGRES_HA_OPTIONS.slice(*valid["ha_type"]).transform_values { |v| {display_name: v.description, standby_count: v.standby_count} },
     }
->>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
   end
 
   def postgres_require_customer_firewall!

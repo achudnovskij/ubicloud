@@ -522,17 +522,7 @@ class PostgresResource < Sequel::Model
     end
 
     options.add_option(name: "family", values: Option::POSTGRES_FAMILY_OPTIONS.keys, parent: "location") do |flavor, location, family|
-<<<<<<< HEAD
-      if location.aws?
-        ["m8gd", "i8g", "i8ge", "i7i", "i7ie"].include?(family) || (Option::AWS_FAMILY_OPTIONS.include?(family) && project.send(:"get_ff_enable_#{family}"))
-      elsif location.gcp?
-        Option::GCP_FAMILY_OPTIONS.include?(family)
-      else
-        family == "standard" || family == "hobby"
-      end
-=======
       available_families_and_sizes_by_location[location.name].any? { |f, _| f == family }
->>>>>>> bb92b3291ffd8a4fd226fec716f350dca8de4623
     end
 
     options.add_option(name: "size", values: Option::POSTGRES_SIZE_OPTIONS.keys, parent: "family") do |flavor, location, family, size|
