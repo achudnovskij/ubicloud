@@ -41,6 +41,9 @@ class OptionTreeGenerator
 
   def self.generate_allowed_options(name, option_tree, parents)
     allowed_options = []
+    # name is unreachable in the tree (its subtree was fully pruned, e.g. a
+    # location with no available families/sizes), so there are no valid options.
+    return allowed_options unless parents[name]
 
     traverse = lambda do |tree, path_to_follow, current_path|
       if path_to_follow.empty?
