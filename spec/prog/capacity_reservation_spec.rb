@@ -1243,7 +1243,19 @@ RSpec.describe Prog::CapacityReservation do
         "current_usage_per_az" => {"c6gd.4xlarge" => {"us-west-2a" => 5, "us-west-2b" => 5, "us-west-2c" => 5}},
       })
       expect(Prog::PageNexus).to receive(:assemble)
-        .with(/cannot satisfy failure-domain caps/, ["CapacityReservation", "FailureDomainCapUnsatisfiable", location.display_name, "c6gd.4xlarge"], [st.ubid], severity: "warning")
+        .with(
+          /cannot satisfy failure-domain caps for c6gd.4xlarge \(15 running, target 6, single\/two-AZ caps 3\/5; busiest /,
+          ["CapacityReservation", "FailureDomainCapUnsatisfiable", location.display_name, "c6gd.4xlarge"],
+          [st.ubid],
+          severity: "warning",
+          extra_data: hash_including(
+            "instance_type" => "c6gd.4xlarge",
+            "target_total" => 6,
+            "single_az_cap" => 3,
+            "two_az_cap" => 5,
+            "usage_per_az" => {"us-west-2a" => 5, "us-west-2b" => 5, "us-west-2c" => 5},
+          ),
+        )
         .and_call_original
       result = nx.reconcile_instance_type("c6gd.4xlarge")
       expect(result.values.sum).to be >= 9 # the running-VM floors are reserved
@@ -1311,6 +1323,97 @@ RSpec.describe Prog::CapacityReservation do
       # offerings spanning two pages -> modified, not recreated.
       expect(api(:modify_capacity_reservation).map { it[:capacity_reservation_id] }).to include("cr-a")
       expect(api(:create_capacity_reservation).map { it[:availability_zone] }).not_to include("us-west-2a")
+    end
+  end
+
+  describe "page resolution" do
+    # Create an active CapacityReservation page with the same tag #page would mint,
+    # and return it so the test can assert it later received a resolve semaphore.
+    def make_page(reason, *extra)
+      Prog::PageNexus.assemble("test page", ["CapacityReservation", reason, location.display_name, *extra], [st.ubid])
+      Page.from_tag_parts("CapacityReservation", reason, location.display_name, *extra)
+    end
+
+    before { location_credential_aws }
+
+    it "resolves a stale location-wide InsufficientAZs page once the location has >= 3 AZs" do
+      refresh_frame(nx, new_values: {"enable_all_families" => true, "instance_families" => {}})
+      allow(nx).to receive(:compute_current_usage).and_return([{}, {}])
+      page = make_page("InsufficientAZs")
+      expect { nx.measure }.to hop("reconcile")
+      expect(page.resolve_set?).to be true
+    end
+
+    it "resolves a stale ReservedPerTypeExceeded page when the target is back under the cap" do
+      allow(nx).to receive(:compute_current_usage).and_return([{}, {}])
+      page = make_page("ReservedPerTypeExceeded", "c6gd.4xlarge")
+      expect { nx.measure }.to hop("reconcile")
+      expect(page.resolve_set?).to be true
+    end
+
+    it "resolves a stale per-type InsufficientAZs page once >= 3 AZs offer the type" do
+      stub_offerings(az_names)
+      page = make_page("InsufficientAZs", "c6gd.4xlarge")
+      nx.eligible_azs("c6gd.4xlarge")
+      expect(page.resolve_set?).to be true
+    end
+
+    it "resolves stale quota and unexpected-error pages after a type reconciles without error" do
+      refresh_frame(nx, new_values: {"current_target" => {"c6gd.4xlarge" => {"total" => 3, "per_az" => {}}}, "reconcile_pending" => ["c6gd.4xlarge"]})
+      stub_offerings(az_names)
+      stub_reservations
+      stub_create_modify
+      quota = make_page("ODCRQuotaExceeded", "c6gd.4xlarge")
+      err = make_page("ReconcileError", "c6gd.4xlarge")
+      expect { nx.reconcile }.to nap(0)
+      expect(quota.resolve_set?).to be true
+      expect(err.resolve_set?).to be true
+    end
+
+    it "resolves a stale FailureDomainCapUnsatisfiable page once the caps are satisfiable" do
+      refresh_frame(nx, new_values: {"current_target" => {"c6gd.4xlarge" => {"total" => 9, "per_az" => {}}}})
+      stub_offerings(az_names)
+      stub_reservations
+      stub_create_modify
+      page = make_page("FailureDomainCapUnsatisfiable", "c6gd.4xlarge")
+      nx.reconcile_instance_type("c6gd.4xlarge")
+      expect(page.resolve_set?).to be true
+    end
+
+    it "resolves stale cap and unmet pages on the already-acceptable short-circuit" do
+      refresh_frame(nx, new_values: {"current_target" => {"c6gd.4xlarge" => {"total" => 3, "per_az" => {}}}})
+      stub_offerings(az_names)
+      stub_reservations(az_names.map { {capacity_reservation_id: "cr-#{it}", availability_zone: it, total_instance_count: 1, state: "active"} })
+      cap = make_page("FailureDomainCapUnsatisfiable", "c6gd.4xlarge")
+      unmet = make_page("UnmetCapacity", "c6gd.4xlarge", "us-west-2a")
+      expect(nx.reconcile_instance_type("c6gd.4xlarge").values.sum).to eq(3)
+      expect(cap.resolve_set?).to be true
+      expect(unmet.resolve_set?).to be true
+    end
+
+    it "resolves a stale UnmetCapacity page for an AZ that is no longer short" do
+      refresh_frame(nx, new_values: {"current_target" => {"c6gd.4xlarge" => {"total" => 9, "per_az" => {}}}})
+      stub_offerings(az_names)
+      stub_reservations
+      stub_create_modify
+      page = make_page("UnmetCapacity", "c6gd.4xlarge", "us-west-2a")
+      nx.reconcile_instance_type("c6gd.4xlarge")
+      expect(page.resolve_set?).to be true
+    end
+
+    it "does NOT resolve quota/error pages when the type is skipped for insufficient AZs" do
+      refresh_frame(nx, new_values: {"current_target" => {"c6gd.4xlarge" => {"total" => 3, "per_az" => {}}}, "reconcile_pending" => ["c6gd.4xlarge"], "min_available_az_insufficient_action" => "WARN"})
+      stub_offerings(%w[us-west-2a us-west-2b]) # < 3 -> reconcile_instance_type returns nil
+      quota = make_page("ODCRQuotaExceeded", "c6gd.4xlarge")
+      err = make_page("ReconcileError", "c6gd.4xlarge")
+      expect { nx.reconcile }.to nap(0)
+      expect(quota.resolve_set?).to be false
+      expect(err.resolve_set?).to be false
+    end
+
+    it "no-ops when there is no active page to resolve" do
+      stub_offerings(az_names)
+      expect { nx.eligible_azs("c6gd.4xlarge") }.not_to raise_error
     end
   end
 end

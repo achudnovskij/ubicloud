@@ -234,6 +234,8 @@ class Prog::CapacityReservation < Prog::Base
       )
       hop_reconcile
     end
+    # Reached only with >= 3 AZs: clear any stale location-wide InsufficientAZs page.
+    resolve_page("InsufficientAZs")
 
     usage, usage_per_az = compute_current_usage
     additional_capacity = frame["additional_capacity"]
@@ -269,6 +271,10 @@ class Prog::CapacityReservation < Prog::Base
         page("ReservedPerTypeExceeded", "target #{target} for #{type} exceeds MAX_RESERVED_PER_TYPE=#{MAX_RESERVED_PER_TYPE}", type)
         next
       end
+      # Target is within the per-type ceiling: clear any stale page for it. Done
+      # before the per-location check so a per-location skip can't strand a per-type
+      # page whose own condition has cleared.
+      resolve_page("ReservedPerTypeExceeded", type)
       if location_sum + target > MAX_RESERVED_PER_LOCATION
         page("ReservedPerLocationExceeded", "per-location reserved sum would exceed MAX_RESERVED_PER_LOCATION=#{MAX_RESERVED_PER_LOCATION}")
         next
@@ -319,6 +325,12 @@ class Prog::CapacityReservation < Prog::Base
         # Surface (or clear) the capacity shortfall recorded by reconcile_instance_type.
         entry = @last_unmet_azs.empty? ? entry.except("unmet_azs") : entry.merge("unmet_azs" => @last_unmet_azs)
         update_stack("current_target" => current_target.merge(type => entry), "reconcile_pending" => pending[1..])
+        # The type reconciled to completion without an AWS error: clear any stale
+        # quota/unexpected-error page from a prior pass. Only here, not in the else
+        # branch -- a nil achieved means the type was skipped for insufficient AZs
+        # before any create/modify, so the quota/error condition was not re-tested.
+        resolve_page("ODCRQuotaExceeded", type)
+        resolve_page("ReconcileError", type)
       else
         # type was paged-and-skipped this pass; leave its prior per_az intact.
         update_stack("reconcile_pending" => pending[1..])
@@ -557,6 +569,9 @@ class Prog::CapacityReservation < Prog::Base
     if achieved.values.sum == target_total &&
         azs.all? { |az| achieved[az].between?(usage[az], [target_total / 2, usage[az]].max) } &&
         achieved.values.max(2).sum <= (5 * target_total) / 6
+      # Already satisfiable with no shortfall: clear any stale cap/unmet pages.
+      resolve_page("FailureDomainCapUnsatisfiable", type)
+      azs.each { |az| resolve_page("UnmetCapacity", type, az) }
       return achieved
     end
     allow_decrease = !frame["allowed_capacity_decrease"].nil?
@@ -584,9 +599,29 @@ class Prog::CapacityReservation < Prog::Base
     # Step 3: apply the failure-domain caps.
     desired = apply_failure_caps(desired, target_total, azs, floor, usage)
     if desired.nil?
-      page("FailureDomainCapUnsatisfiable", "cannot satisfy failure-domain caps for #{type}", type)
+      single_cap = target_total / 2
+      two_cap = (5 * target_total) / 6
+      running = usage.values.sum
+      busiest = usage.select { |_, v| v.positive? }.sort_by { |az, v| [-v, az] }.first(2).map { |az, v| "#{az}=#{v}" }.join(", ")
+      page(
+        "FailureDomainCapUnsatisfiable",
+        "cannot satisfy failure-domain caps for #{type} (#{running} running, target #{target_total}, single/two-AZ caps #{single_cap}/#{two_cap}; busiest #{busiest})",
+        type,
+        extra_data: {
+          "instance_type" => type,
+          "target_total" => target_total,
+          "single_az_cap" => single_cap,
+          "two_az_cap" => two_cap,
+          "additional_capacity" => frame["additional_capacity"],
+          "eligible_azs" => azs,
+          "usage_per_az" => usage,
+          "reserved_per_az" => achieved,
+        },
+      )
       return achieved
     end
+    # Caps are satisfiable this pass: clear any stale page from a prior one.
+    resolve_page("FailureDomainCapUnsatisfiable", type)
 
     # Steps 4-5: reserve the desired split, degrading per AZ on capacity errors.
     # When allowed_capacity_decrease is set, also shrink AZs whose desired dropped
@@ -654,6 +689,8 @@ class Prog::CapacityReservation < Prog::Base
     @last_unmet_azs.each do |az, since|
       page("UnmetCapacity", "#{type} capacity unmet in #{az} for over #{UNMET_PAGE_AFTER / 3600}h", type, az) if now - since >= UNMET_PAGE_AFTER
     end
+    # AZs that recovered this pass (no longer short): clear any stale UnmetCapacity page.
+    (azs - @last_unmet_azs.keys).each { |az| resolve_page("UnmetCapacity", type, az) }
     achieved
   end
 
@@ -720,6 +757,8 @@ class Prog::CapacityReservation < Prog::Base
       report_insufficient_azs("only #{azs.size} AZ(s) available for #{type}; need >=3", type)
       return nil
     end
+    # >= 3 AZs offer the type now: clear any stale per-type InsufficientAZs page.
+    resolve_page("InsufficientAZs", type)
     azs
   end
 
@@ -943,12 +982,27 @@ class Prog::CapacityReservation < Prog::Base
     surplus
   end
 
-  def page(reason, summary, *extra)
+  def page(reason, summary, *extra, extra_data: {})
+    kwargs = {severity: "warning"}
+    kwargs[:extra_data] = extra_data unless extra_data.empty?
     Prog::PageNexus.assemble(
       "CapacityReservation #{location.display_name}: #{summary}",
       ["CapacityReservation", reason, location.display_name, *extra],
       [strand.ubid],
-      severity: "warning",
+      **kwargs,
     )
+  end
+
+  # Resolve the page #page would have raised for the same (reason, *extra), if one
+  # is currently active. Symmetric to #page; from_tag_parts returns nil when nothing
+  # is active, so &.incr_resolve is a safe no-op. Called wherever a paged condition
+  # is rechecked and found clear. Two pages are intentionally NOT auto-resolved and
+  # so are never passed here: LocationGone (the strand pops; its ODCRs are genuinely
+  # orphaned) and ReservedPerLocationExceeded (a hard cost guardrail breach) -- both
+  # warrant a human ack. A per-type/per-AZ page whose subject vanishes entirely (e.g.
+  # a type whose last VM disappears under enable_all_families) is not revisited and
+  # so is not auto-resolved either; an operator acks those manually.
+  def resolve_page(reason, *extra)
+    Page.from_tag_parts("CapacityReservation", reason, location.display_name, *extra)&.incr_resolve
   end
 end
