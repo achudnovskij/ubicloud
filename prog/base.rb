@@ -17,6 +17,29 @@ class Prog::Base
     @subject_id = frame.dig("subject_id") || @strand.id
   end
 
+  def self.frame_reader(*attr)
+    attr.each do |attr|
+      attr = attr.to_s
+      define_method(attr) { frame[attr] }
+    end
+  end
+
+  def self.frame_accessor(*attr)
+    frame_reader(*attr)
+
+    attr.each do |attr|
+      attr = attr.to_s
+      define_method(:"#{attr}=") do |v|
+        strand.modified!(:stack)
+        @frame = nil
+        strand.stack[0][attr] = v
+      end
+    end
+  end
+
+  frame_reader :link
+  frame_accessor :deadline_at, :deadline_target, :deadline_start
+
   # Searches the stack for the Prog that caused execution of the code,
   # which can be useful in logging from nested method calls.
   def self.current_prog
@@ -122,7 +145,7 @@ end
       end,
     )
 
-    if strand.stack.length > 0 && (link = frame["link"])
+    if strand.stack.length > 0 && link
       # This is a multi-level stack with a back-link, i.e. one prog
       # calling another in the same Strand of execution.  The thing to
       # do here is pop the stack entry.
@@ -365,31 +388,28 @@ end
     strand.time_string(time)
   end
 
-  def register_deadline(deadline_target, deadline_in, allow_extension: false)
-    current_frame = strand.stack.first
+  def register_deadline(new_deadline_target, deadline_in, allow_extension: false)
     time = Time.now
     new_deadline = time + deadline_in
 
-    if (deadline_at = current_frame["deadline_at"]).nil? ||
-        (old_deadline_target = current_frame["deadline_target"]) != deadline_target ||
+    if deadline_at.nil? ||
+        deadline_target != new_deadline_target ||
         allow_extension ||
         Time.parse(deadline_at) > new_deadline
 
-      if old_deadline_target != deadline_target && (pg = Page.from_tag_parts("Deadline", strand.id, strand.prog, old_deadline_target))
+      if deadline_target != new_deadline_target && (pg = Page.from_tag_parts("Deadline", strand.id, strand.prog, deadline_target))
         pg.incr_resolve
       end
 
-      current_frame["deadline_target"] = deadline_target
+      self.deadline_target = new_deadline_target
 
       if allow_extension.is_a?(Integer)
-        current_frame["deadline_start"] ||= time_string(time)
-        cap = Time.parse(current_frame["deadline_start"]) + allow_extension
-        current_frame["deadline_at"] = time_string([new_deadline, cap].min)
-      else
-        current_frame["deadline_at"] = time_string(new_deadline)
+        self.deadline_start ||= time_string(time)
+        cap = Time.parse(deadline_start) + allow_extension
+        new_deadline = [new_deadline, cap].min
       end
 
-      strand.modified!(:stack)
+      self.deadline_at = time_string(new_deadline)
     end
   end
 

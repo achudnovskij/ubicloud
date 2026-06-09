@@ -53,6 +53,27 @@ RSpec.describe Prog::Vnet::Gcp::VpcNexus do
       vpc = st.subject
       expect(vpc).to be_a(GcpVpc)
       expect(vpc.name).to start_with("ubicloud-")
+      expect(vpc.dedicated_for_subnet_id).to be_nil
+    end
+
+    it "persists dedicated_for_subnet_id and uses a subnet-keyed GCP-side name when passed" do
+      assemble_project = Project.create(name: "test-gcp-vpc-dedicated")
+      ps = PrivateSubnet.create(
+        name: "ps", location_id: location.id, project_id: assemble_project.id,
+        net6: "fd10:9b0b:6b4b:8fbb::/64", net4: "10.0.0.0/26", state: "waiting",
+      )
+      ps2 = PrivateSubnet.create(
+        name: "ps2", location_id: location.id, project_id: assemble_project.id,
+        net6: "fd10:9b0b:6b4b:8fbc::/64", net4: "10.0.1.0/26", state: "waiting",
+      )
+
+      vpc1 = described_class.assemble(assemble_project.id, location.id, dedicated_for_subnet_id: ps.id).subject
+      vpc2 = described_class.assemble(assemble_project.id, location.id, dedicated_for_subnet_id: ps2.id).subject
+
+      expect(vpc1.dedicated_for_subnet_id).to eq(ps.id)
+      expect(vpc1.name).to eq("ubicloud-vpc-#{ps.ubid}")
+      expect(vpc2.name).to eq("ubicloud-vpc-#{ps2.ubid}")
+      expect(vpc1.name).not_to eq(vpc2.name)
     end
 
     it "raises for invalid project" do
@@ -340,11 +361,11 @@ RSpec.describe Prog::Vnet::Gcp::VpcNexus do
       expect(Clog).to receive(:emit).with("GCP firewall policy association created", hash_including(gcp_firewall_policy_association_created: "#{vpc_name}@#{vpc_name}")).and_call_original
 
       expect { nx.send(:verify_firewall_policy_associated_with_vpc!, vpc_target) }.to nap(5)
-      expect(frame_value(nx, "verify_assoc_try")).to eq(1)
+      expect(nx.strand.stack[0]["verify_assoc_try"]).to eq(1)
 
       refresh_frame(nx)
       expect { nx.send(:verify_firewall_policy_associated_with_vpc!, vpc_target) }.to hop("create_vpc_deny_rules")
-      expect(frame_value(nx, "verify_assoc_try")).to eq(0)
+      expect(nx.strand.stack[0]["verify_assoc_try"]).to eq(0)
     end
 
     it "raises a terminal error after VERIFY_ASSOC_MAX_TRIES unsuccessful attempts" do

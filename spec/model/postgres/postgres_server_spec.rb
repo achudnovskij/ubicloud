@@ -478,12 +478,12 @@ RSpec.describe PostgresServer do
       expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
     end
 
-    it "returns empty when all primary logical failover slots are synced on standby" do
+    it "returns empty when all primary logical failover slots are synced and caught up on standby" do
       expect(postgres_server).to receive(:read_replica?).and_return(false)
       postgres_server.update(version: "17")
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).and_return("slot1\nslot2")
-      expect(standby.vm.sshable).to receive(:_cmd).and_return("slot1\nslot2")
+      expect(postgres_server.vm.sshable).to receive(:_cmd).and_return("slot1,0/100\nslot2,0/200")
+      expect(standby.vm.sshable).to receive(:_cmd).and_return("slot1,0/100\nslot2,0/200")
       expect(postgres_server.unsynced_logical_failover_slots(standby)).to be_empty
     end
 
@@ -491,9 +491,18 @@ RSpec.describe PostgresServer do
       expect(postgres_server).to receive(:read_replica?).and_return(false)
       postgres_server.update(version: "17")
       Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
-      expect(postgres_server.vm.sshable).to receive(:_cmd).and_return("slot1\nslot2")
-      expect(standby.vm.sshable).to receive(:_cmd).and_return("slot1")
+      expect(postgres_server.vm.sshable).to receive(:_cmd).and_return("slot1,0/100\nslot2,0/200")
+      expect(standby.vm.sshable).to receive(:_cmd).and_return("slot1,0/100")
       expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq(["slot2"])
+    end
+
+    it "returns slot names whose synced confirmed_flush lags the primary" do
+      expect(postgres_server).to receive(:read_replica?).and_return(false)
+      postgres_server.update(version: "17")
+      Strand.create_with_id(postgres_server, prog: "Postgres::PostgresServerNexus", label: "wait")
+      expect(postgres_server.vm.sshable).to receive(:_cmd).and_return("slot1,0/200")
+      expect(standby.vm.sshable).to receive(:_cmd).and_return("slot1,0/100")
+      expect(postgres_server.unsynced_logical_failover_slots(standby)).to eq(["slot1"])
     end
   end
 
@@ -774,12 +783,8 @@ RSpec.describe PostgresServer do
   end
 
   it "returns the right storage_device_paths for AWS" do
-    vm # load before setting aws provider so test controls VmStorageVolume setup
     location.update(provider: "aws")
-    VmStorageVolume.create(vm:, disk_index: 0, boot: true, size_gib: 64)
-    VmStorageVolume.create(vm:, disk_index: 1, boot: false, size_gib: 1024)
-    VmStorageVolume.create(vm:, disk_index: 2, boot: false, size_gib: 1024)
-    expect(postgres_server.vm.sshable).to receive(:_cmd).with("lsblk -b -d -o NAME,SIZE | sort -n -k2 | tail -n2 |  awk '{print \"/dev/\"$1}'").and_return("/dev/nvme1n1\n/dev/nvme2n1\n")
+    expect(postgres_server.vm.sshable).to receive(:_cmd).with("lsblk -b -d -n -e 7 -o NAME,SIZE | sort -n -k2 | tail -n +2 | awk '{print \"/dev/\"$1}'").and_return("/dev/nvme1n1\n/dev/nvme2n1\n")
     expect(postgres_server.storage_device_paths).to eq(["/dev/nvme1n1", "/dev/nvme2n1"])
   end
 

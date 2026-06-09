@@ -31,14 +31,12 @@ class InstanceAvailabilityGenerator
     regions = fetch_regions
     log "Found #{regions.size} regions: #{regions.join(", ")}"
 
-    env_parallel = ENV["PARALLEL_REGIONS_COUNT"]
-    parallel_count = (env_parallel || "10").to_i
+    parallel_count = Integer(ENV.fetch("PARALLEL_REGIONS_COUNT", "10"), 10)
     parallel_count = 1 if parallel_count < 1
-    log "Parallelism: #{parallel_count} #{env_parallel ? "(from PARALLEL_REGIONS_COUNT)" : "(default)"}"
-    log "\nFetching instance types from AWS regions (#{parallel_count} in parallel)..."
+    log "\nFetching instance types from #{regions.size} regions (#{parallel_count} in parallel)..."
 
     queue = Queue.new
-    regions.each { |r| queue << r }
+    regions.each { queue << it }
 
     workers = Array.new(parallel_count) do
       Thread.new do
@@ -46,6 +44,7 @@ class InstanceAvailabilityGenerator
           region = begin
             queue.pop(true)
           rescue ThreadError
+            # queue drained
             break
           end
           log "Processing region: #{region}"
@@ -55,15 +54,16 @@ class InstanceAvailabilityGenerator
     end
     workers.each(&:join)
 
+    # Canonical region order; parallel fetch inserts out of order
     @data["providers"]["aws"]["locations"] = @data["providers"]["aws"]["locations"].sort.to_h
     @data
   end
 
+  private
+
   def log(msg)
     @log_mutex.synchronize { puts msg }
   end
-
-  private
 
   def fetch_regions
     # Use us-east-1 as the default region to query for all available regions
@@ -75,8 +75,8 @@ class InstanceAvailabilityGenerator
     log "Excluding regions: #{excluded.join(", ")}" unless excluded.empty?
     all_regions - EXCLUDED_REGIONS
   rescue Aws::EC2::Errors::ServiceError => e
-    puts "Error fetching regions: #{e.message}"
-    puts "Falling back to default regions"
+    log "Error fetching regions: #{e.message}"
+    log "Falling back to default regions"
     ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-southeast-1", "ap-northeast-1"]
   end
 
@@ -160,7 +160,7 @@ if __FILE__ == $0
   if output_file.nil? || output_file.empty?
     puts "Usage: #{$0} <output_file_path>"
     puts ""
-    puts "Example: #{$0} config/postgres_instance_availability.yaml"
+    puts "Example: #{$0} config/instance_availability.yml"
     puts ""
     exit 1
   end

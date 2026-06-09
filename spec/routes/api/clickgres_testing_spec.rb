@@ -36,8 +36,13 @@ RSpec.describe Clover, "clickgres-testing" do
       raise raise_error if raise_error
       ""
     end
+    # inject-failure deliberately issues SSH from the route (test tooling gated
+    # by ENABLE_FAILURE_INJECTION); bypass the route-spec SSH guard for the block
+    # while keeping the _cmd stub so placeholder substitution still happens.
+    route_spec, Thread.current[:route_spec] = Thread.current[:route_spec], nil
     yield cmds
   ensure
+    Thread.current[:route_spec] = route_spec
     NetSsh::WarnUnsafe::Sshable.define_method(:_cmd, original)
   end
 
