@@ -683,6 +683,10 @@ class PostgresServer < Sequel::Model
     Clog.emit("Failed to observe root disk usage", Util.exception_to_hash(ex, into: {postgres_server_id: id}))
   end
 
+  def apply_lockout
+    vm.sshable.cmd("timeout 10 sudo postgres/bin/lockout :version", version:, timeout: 15)
+  end
+
   METRICS_BACKLOG_THRESHOLD_SECONDS = 300
   FAILOVER_LABELS = ["prepare_for_unplanned_take_over", "prepare_for_planned_take_over", "wait_fencing_of_old_primary", "taking_over", "lockout", "wait_lockout_attempt", "wait_representative_lockout"].freeze
   MIN_ARCHIVAL_RATE_BYTES_PER_SEC = 10 * 1024 * 1024

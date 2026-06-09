@@ -1670,4 +1670,14 @@ RSpec.describe PostgresServer do
       end
     end
   end
+
+  describe "#apply_lockout" do
+    it "runs the rhizome lockout script over SSH with the server's version and a 15s session timeout" do
+      expect(postgres_server.vm.sshable).to receive(:_cmd).with(
+        "timeout 10 sudo postgres/bin/lockout #{postgres_server.version}",
+        timeout: 15,
+      )
+      postgres_server.apply_lockout
+    end
+  end
 end
