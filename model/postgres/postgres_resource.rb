@@ -27,11 +27,7 @@ class PostgresResource < Sequel::Model
     :destroy, :refresh_certificates, :use_different_az, :use_old_walg_command, :check_disk_usage,
     :storage_auto_scale_action_performed_80, :storage_auto_scale_action_performed_85, :storage_auto_scale_action_performed_90,
     :storage_auto_scale_canceled, :storage_auto_scale_not_cancellable, :skip_strict_memory_overcommit,
-<<<<<<< HEAD
-    :billing_deactivate
-=======
-    :bypass_maintenance_window
->>>>>>> 9f91426762076f77eb972c5a2e0d6444aceb11ea
+    :billing_deactivate, :bypass_maintenance_window
   include ObjectTag::Cleanup
 
   ServerExclusionFilters = Struct.new(:exclude_host_ids, :exclude_data_centers, :exclude_availability_zones, :availability_zone)

@@ -12,12 +12,12 @@ RSpec.describe Prog::Postgres::PostgresTimelineNexus::PrependMethods do # ruboco
   describe "#take_backup" do
     before { st.update(label: "take_backup") }
 
-    it "clears take_backup_for_scale_down and hops to wait when the leader has vanished (e.g. mid billing-deactivate destroy)" do
-      postgres_timeline.incr_take_backup_for_scale_down
+    it "clears take_backup_for_converge and hops to wait when the leader has vanished (e.g. mid billing-deactivate destroy)" do
+      postgres_timeline.incr_take_backup_for_converge
       allow(nx.postgres_timeline).to receive(:leader).and_return(nil)
 
       expect { nx.take_backup }.to hop("wait")
-      expect(postgres_timeline.reload.take_backup_for_scale_down_set?).to be(false)
+      expect(postgres_timeline.reload.take_backup_for_converge_set?).to be(false)
     end
 
     it "prepends the base #take_backup (super_method present)" do

@@ -83,9 +83,9 @@ class Prog::Postgres::PostgresResourceNexus
       # than the customer's last writes and must not satisfy the gate.
       self.billing_deactivate_kicked_off_at = Time.now.utc.iso8601
       # Reuse the upstream "force a fresh backup now" semaphore — same mechanism
-      # as the storage-scale-down path, distinct kickoff-timestamp gate keeps the
+      # as the converge path, distinct kickoff-timestamp gate keeps the
       # two flows from being confused.
-      timeline.incr_take_backup_for_scale_down
+      timeline.incr_take_backup_for_converge
       hop_billing_deactivate_wait_backup
     end
 
