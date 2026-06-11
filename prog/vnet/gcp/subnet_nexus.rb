@@ -30,31 +30,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
     register_deadline("wait", 5 * 60)
 
     gcp_vpc = private_subnet.gcp_vpc ||
-      if private_subnet.project.gcp_dedicated_subnet_vpcs
-        # Look up by dedicated_for_subnet_id (not the join row) so
-        # a label re-entry that left the assemble committed but the
-        # join row not yet inserted can still find its dedicated VPC
-        # instead of leaking a second one.
-        GcpVpc.where(dedicated_for_subnet_id: private_subnet.id).first ||
-          Prog::Vnet::Gcp::VpcNexus.assemble(
-            private_subnet.project_id,
-            private_subnet.location_id,
-            dedicated_for_subnet_id: private_subnet.id,
-          ).subject
-      else
-        # The dedicated_for_subnet_id: nil filter is load-bearing:
-        # without it, once the project has any dedicated VPCs, this
-        # lookup could grab another subnet's dedicated row.
-        GcpVpc.where(
-          project_id: private_subnet.project_id,
-          location_id: private_subnet.location_id,
-          dedicated_for_subnet_id: nil,
-        ).first ||
-          Prog::Vnet::Gcp::VpcNexus.assemble(
-            private_subnet.project_id,
-            private_subnet.location_id,
-          ).subject
-      end
+      (private_subnet.project.gcp_dedicated_subnet_vpcs ? ensure_dedicated_vpc : ensure_shared_vpc)
     unless private_subnet.gcp_vpc
       gcp_vpc.add_private_subnet(private_subnet)
       # Firewalls attached to this subnet (or to VMs whose NICs live in
@@ -104,7 +80,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   label def wait_create_subnet
     poll_and_clear_gcp_op("create_subnet") do |op|
       begin
-        credential.subnetworks_client.get(project: gcp_project_id, region: gcp_region, subnetwork: subnet_name)
+        get_gce_subnet
       rescue Google::Cloud::NotFoundError
         raise "GCP subnet #{subnet_name} creation failed: #{op_error_message(op)}"
       end
@@ -211,7 +187,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   label def wait_delete_subnet
     poll_and_clear_gcp_op("delete_subnet") do |op|
       begin
-        credential.subnetworks_client.get(project: gcp_project_id, region: gcp_region, subnetwork: subnet_name)
+        get_gce_subnet
       rescue Google::Cloud::NotFoundError
         Clog.emit("GCP subnet already gone despite LRO error; proceeding",
           {gcp_subnet_already_gone: {subnet: subnet_name, lro_error: op_error_message(op)}})
@@ -228,7 +204,7 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
     # so we still see it on a re-entry that happened after the join row
     # was removed but before the gcp_vpc row was deleted.
     gcp_vpc = private_subnet.gcp_vpc(&:for_no_key_update) ||
-      GcpVpc.where(dedicated_for_subnet_id: private_subnet.id).first
+      GcpVpc.first(dedicated_for_subnet_id: private_subnet.id)
 
     if gcp_vpc&.dedicated_for_subnet_id == private_subnet.id
       # Dedicated VPC: the cloud VPC and the subnet are 1:1, so the
@@ -245,6 +221,14 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
       nap 5
     end
 
+    # Hold the row until GCE stops resolving the deleted subnet.
+    begin
+      get_gce_subnet
+      nap 10
+    rescue Google::Cloud::NotFoundError
+      nil
+    end
+
     private_subnet.destroy
 
     if gcp_vpc && gcp_vpc.private_subnets_dataset.empty?
@@ -255,6 +239,44 @@ class Prog::Vnet::Gcp::SubnetNexus < Prog::Base
   end
 
   private
+
+  # Look up by dedicated_for_subnet_id (not the join row) so a label
+  # re-entry that left the assemble committed but the join row not yet
+  # inserted can still find its dedicated VPC instead of leaking a
+  # second one.
+  def ensure_dedicated_vpc
+    GcpVpc.first(dedicated_for_subnet_id: private_subnet.id) ||
+      Prog::Vnet::Gcp::VpcNexus.assemble(
+        private_subnet.project_id,
+        private_subnet.location_id,
+        dedicated_for_subnet_id: private_subnet.id,
+      ).subject
+  end
+
+  # The dedicated_for_subnet_id: nil filter is load-bearing: without
+  # it, once the project has any dedicated VPCs, this lookup could
+  # grab another subnet's dedicated row. finish_destroy takes the same
+  # row lock before the last-subnet-out incr_destroy.
+  def ensure_shared_vpc
+    vpc = GcpVpc.where(
+      project_id: private_subnet.project_id,
+      location_id: private_subnet.location_id,
+      dedicated_for_subnet_id: nil,
+    ).for_no_key_update.first
+    if vpc && (vpc.destroy_set? || vpc.destroying_set?)
+      Clog.emit("Waiting for draining GCP VPC before attaching subnet",
+        {gcp_vpc_draining: {vpc: vpc.name, label: vpc.strand.label}})
+      nap 5
+    end
+    vpc || Prog::Vnet::Gcp::VpcNexus.assemble(
+      private_subnet.project_id,
+      private_subnet.location_id,
+    ).subject
+  end
+
+  def get_gce_subnet
+    credential.subnetworks_client.get(project: gcp_project_id, region: gcp_region, subnetwork: subnet_name)
+  end
 
   def firewall_policy_name
     private_subnet.gcp_vpc.name

@@ -15,8 +15,8 @@ RSpec.describe Location do
   it ".for_project filters dataset to given project and non-project-specific locations" do
     p1_loc
     p2_loc
-    expect(described_class.for_project(p1_id).select_order_map(:name)).to eq ["gcp-us-central1", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l1", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2", "us-west-u1-ps"]
-    expect(described_class.for_project(p2_id).select_order_map(:name)).to eq ["gcp-us-central1", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l2", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2", "us-west-u1-ps"]
+    expect(described_class.for_project(p1_id).select_order_map(:name)).to eq ["gcp-us-central1", "gcp-us-east4", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l1", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2", "us-west-u1-ps"]
+    expect(described_class.for_project(p2_id).select_order_map(:name)).to eq ["gcp-us-central1", "gcp-us-east4", "github-runners", "hetzner-ai", "hetzner-fsn1", "hetzner-hel1", "l2", "latitude-ai", "latitude-fra", "leaseweb-wdc02", "tr-ist-u1", "tr-ist-u1-tom", "us-east-1", "us-west-2", "us-west-u1-ps"]
   end
 
   it ".visible_or_for_project filters dataset to given project and visible non-project-specific locations" do
@@ -101,6 +101,40 @@ RSpec.describe Location do
     end
   end
 
+  describe "gcp-us-east4 (seeded hidden Postgres location)" do
+    subject(:east4) { described_class[name: "gcp-us-east4"] }
+
+    it "is seeded as a hidden GCP location with the expected attributes" do
+      expect(east4).not_to be_nil
+      expect(east4.provider).to eq("gcp")
+      expect(east4.visible).to be(false)
+      expect(east4.display_name).to eq("us-east4")
+      expect(east4.ui_name).to eq("Virginia, US (GCP)")
+    end
+
+    it "has billing rates for every Postgres family in the region (validate_billing_rate passes)" do
+      ["standard-c4a-standard", "standard-c4a-highmem"].each do |family|
+        expect { Validation.validate_billing_rate("PostgresVCpu", family, "gcp-us-east4") }.not_to raise_error
+        expect { Validation.validate_billing_rate("PostgresStandbyVCpu", family, "gcp-us-east4") }.not_to raise_error
+      end
+      expect { Validation.validate_billing_rate("PostgresStorage", "standard", "gcp-us-east4") }.not_to raise_error
+      expect { Validation.validate_billing_rate("PostgresStandbyStorage", "standard", "gcp-us-east4") }.not_to raise_error
+    end
+
+    it "has the VmVCpu rates the backing Postgres VM needs (no nil[\"id\"] crash on provisioning)" do
+      ["c4a-standard", "c4a-highmem"].each do |family|
+        expect(BillingRate.from_resource_properties("VmVCpu", family, "gcp-us-east4")).not_to be_nil
+      end
+    end
+
+    it "stays hidden: excluded from VM listings and from postgres_locations unless flag-listed" do
+      project_id = Project.create(name: "east4-vis-test").id
+      expect(described_class.visible_or_for_project(project_id, []).select_order_map(:name)).not_to include("gcp-us-east4")
+      expect(described_class.postgres_locations.map(&:name)).not_to include("gcp-us-east4")
+      expect(described_class.postgres_locations(["gcp-us-east4"]).map(&:name)).to include("gcp-us-east4")
+    end
+  end
+
   it "#azs raises if not aws location" do
     p1_loc.update(provider: "hetzner")
     expect { p1_loc.azs }.to raise_error("azs is only valid for aws locations")
@@ -145,5 +179,55 @@ RSpec.describe Location do
     expect {
       gcp_loc.pg_gce_image("x64", "17")
     }.to raise_error("No GCE image found for arch x64 and pg_version 17")
+  end
+
+  describe "#scheduled_maintenance_events" do
+    def event(not_before:, code: "system-reboot", description: "scheduled reboot")
+      {code:, description:, not_before:, instance_event_id: "instance-event-1"}
+    end
+
+    def stub_client(events)
+      client = Aws::EC2::Client.new(stub_responses: true, region: "us-west-2")
+      client.stub_responses(:describe_instance_status, instance_statuses: [{instance_id: "i-0123456789abcdefg", events:}])
+      expect(p2_loc.location_credential_aws).to receive(:client).and_return(client)
+    end
+
+    before do
+      LocationCredentialAws.create_with_id(p2_loc.id, access_key: "k", secret_key: "s")
+    end
+
+    it "maps instances with pertinent events to the earliest not_before by vm id" do
+      vm = create_vm(location_id: p2_loc.id)
+      AwsInstance.create_with_id(vm, instance_id: "i-0123456789abcdefg")
+      soonest = Time.now + 10 * 3600
+      stub_client([event(not_before: soonest + 3600), event(not_before: soonest)])
+
+      events = p2_loc.scheduled_maintenance_events
+      expect(events.keys).to eq([vm.id])
+      expect(events[vm.id]).to be_within(1).of(soonest)
+    end
+
+    it "ignores completed events" do
+      stub_client([event(not_before: Time.now + 3600, description: "[Completed] reboot")])
+      expect(p2_loc.scheduled_maintenance_events).to eq({})
+    end
+
+    it "ignores events whose code is not handled" do
+      stub_client([event(not_before: Time.now + 3600, code: "unknown-event")])
+      expect(p2_loc.scheduled_maintenance_events).to eq({})
+    end
+
+    it "returns empty for aws locations without a credential" do
+      expect(p1_loc.location_credential_aws).to be_nil
+      expect(p1_loc.scheduled_maintenance_events).to eq({})
+    end
+
+    it "returns empty for gcp locations" do
+      expect(described_class[name: "gcp-us-central1"].scheduled_maintenance_events).to eq({})
+    end
+
+    it "returns empty for metal locations" do
+      expect(described_class[name: "hetzner-fsn1"].scheduled_maintenance_events).to eq({})
+    end
   end
 end

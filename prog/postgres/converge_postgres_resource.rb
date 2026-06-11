@@ -8,10 +8,10 @@ class Prog::Postgres::ConvergePostgresResource < Prog::Base
     nap 60 if postgres_resource.read_replica? && !postgres_resource.parent.ready_for_read_replica?
 
     timeline = postgres_resource.effective_timeline
-    nap 60 if timeline.take_backup_for_scale_down_set?
+    nap 60 if timeline.take_backup_for_converge_set?
 
-    if postgres_resource.latest_backup_too_large_for_target? && !timeline.take_backup_for_scale_down_set?
-      timeline.incr_take_backup_for_scale_down
+    if timeline.latest_backup_size_in_gib.nil? || postgres_resource.latest_backup_too_large_for_target?
+      timeline.incr_take_backup_for_converge
       register_deadline("wait_for_maintenance_window", 6 * 60 * 60)
       nap 60
     end
@@ -52,7 +52,7 @@ class Prog::Postgres::ConvergePostgresResource < Prog::Base
   end
 
   label def wait_for_maintenance_window
-    unless postgres_resource.in_maintenance_window?
+    unless postgres_resource.in_maintenance_window? || postgres_resource.bypass_maintenance_window_set?
       ignore_window = begin
         postgres_resource.representative_server.disk_usage_percent >= 95
       rescue Sshable::SshError, *Sshable::SSH_CONNECTION_ERRORS => e
@@ -149,6 +149,7 @@ class Prog::Postgres::ConvergePostgresResource < Prog::Base
 
   label def prune_servers
     postgres_resource.decr_storage_auto_scale_not_cancellable
+    postgres_resource.decr_bypass_maintenance_window
 
     # Below we only keep servers that does not need recycling or are of the
     # current version. If there are more such servers than required, we prefer

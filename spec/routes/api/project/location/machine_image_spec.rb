@@ -161,7 +161,7 @@ RSpec.describe Clover, "machine-image" do
       post "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/new-mi",
         {vm: source_vm.ubid, version: "bad/version"}.to_json
       expect(last_response.status).to eq(400)
-      expect(JSON.parse(last_response.body)["error"]["details"]).to have_key("version")
+      expect(JSON.parse(last_response.body)["error"]["message"]).to match(/^version must start with a letter or number/)
     end
 
     it "rejects POST with a UBID in the path (create is name-only)" do
@@ -239,7 +239,7 @@ RSpec.describe Clover, "machine-image" do
 
   describe "update" do
     it "sets latest_version to the given version" do
-      mi_version_metal.update(enabled: true)
+      mi_version_metal.update(status: "ready")
       patch "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}",
         {latest_version: mi_version.version}.to_json
       expect(last_response.status).to eq(200)
@@ -247,14 +247,12 @@ RSpec.describe Clover, "machine-image" do
       expect(mi.reload.latest_version_id).to eq(mi_version.id)
     end
 
-    it "unsets latest_version when null is provided" do
-      mi_version_metal.update(enabled: true)
-      mi.update(latest_version_id: mi_version.id)
-      patch "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}",
-        {latest_version: nil}.to_json
-      expect(last_response.status).to eq(200)
-      expect(JSON.parse(last_response.body)["latest_version"]).to be_nil
-      expect(mi.reload.latest_version_id).to be_nil
+    it "rejects null latest_version" do
+      mi
+      expect {
+        patch "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}",
+          {latest_version: nil}.to_json
+      }.to raise_error(Committee::InvalidRequest, /does not allow null values/)
     end
 
     it "returns 400 when version is not found" do
@@ -265,7 +263,7 @@ RSpec.describe Clover, "machine-image" do
     end
 
     it "returns 400 when version is not ready" do
-      mi_version_metal.update(enabled: false)
+      mi_version_metal.update(status: "destroying")
       patch "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}",
         {latest_version: mi_version.version}.to_json
       expect(last_response).to have_api_error(400, "Version #{mi_version.version} is not ready")
@@ -416,13 +414,13 @@ RSpec.describe Clover, "machine-image" do
       extra = MachineImageVersion.create(machine_image_id: mi.id, version: "v2")
       extra_metal = MachineImageVersionMetal.create_with_id(
         extra, archive_kek_id: mi_version_metal.archive_kek_id,
-        store_id: mi_version_metal.store_id, store_prefix: "p2", enabled: true, archive_size_mib: 100,
+        store_id: mi_version_metal.store_id, store_prefix: "p2", status: "ready", archive_size_mib: 100,
       )
       mi.update(latest_version_id: mi_version.id)
 
       delete "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}/version/v2"
       expect(last_response.status).to eq(204)
-      expect(extra_metal.reload.enabled).to be false
+      expect(extra_metal.reload.status).to eq("destroying")
       expect(Strand[extra_metal.id].prog).to eq("MachineImage::DestroyVersionMetal")
     end
 
@@ -434,24 +432,25 @@ RSpec.describe Clover, "machine-image" do
     end
 
     it "returns 400 when version is still being created" do
-      mi_version_metal.update(enabled: false, archive_size_mib: nil)
+      mi_version_metal.update(status: "creating", archive_size_mib: nil)
       delete "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}/version/#{mi_version.version}"
       expect(last_response).to have_api_error(400, "Version is still being created; wait for it to finish before destroying")
     end
 
     it "is idempotent when version is already being destroyed" do
-      mi_version_metal.update(enabled: false)
+      mi_version_metal.update(status: "destroying")
       expect {
         delete "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}/version/#{mi_version.version}"
       }.not_to change { Strand[mi_version_metal.id] }
       expect(last_response.status).to eq(204)
     end
 
-    it "returns 400 when destroying the latest version" do
+    it "destroys the latest version and clears latest_version_id when no ready sibling exists" do
       mi_version_metal
       mi.update(latest_version_id: mi_version.id)
       delete "/project/#{project.ubid}/location/#{TEST_LOCATION}/machine-image/#{mi.name}/version/#{mi_version.version}"
-      expect(last_response).to have_api_error(400, "Cannot destroy the latest version of a machine image")
+      expect(last_response.status).to eq(204)
+      expect(mi.reload.latest_version_id).to be_nil
     end
 
     it "returns 404 when version is not found" do
@@ -475,7 +474,7 @@ RSpec.describe Clover, "machine-image" do
       extra = MachineImageVersion.create(machine_image_id: mi.id, version: "v2")
       MachineImageVersionMetal.create_with_id(
         extra, archive_kek_id: mi_version_metal.archive_kek_id,
-        store_id: mi_version_metal.store_id, store_prefix: "p2", enabled: true, archive_size_mib: 100,
+        store_id: mi_version_metal.store_id, store_prefix: "p2", status: "ready", archive_size_mib: 100,
       )
       mi.update(latest_version_id: extra.id)
 

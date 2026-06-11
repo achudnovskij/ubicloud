@@ -11,11 +11,6 @@ class MachineImageVersionMetal < Sequel::Model
 
   plugin ResourceMethods, referencing: UBID::TYPE_MACHINE_IMAGE_VERSION
 
-  def display_state
-    return "ready" if enabled
-    archive_size_mib ? "destroying" : "creating"
-  end
-
   def create_billing_record
     miv = machine_image_version
     mi = miv.machine_image
@@ -34,15 +29,16 @@ end
 # Table: machine_image_version_metal
 # Columns:
 #  id               | uuid    | PRIMARY KEY
-#  enabled          | boolean | NOT NULL DEFAULT false
 #  archive_size_mib | integer |
 #  archive_kek_id   | uuid    | NOT NULL
 #  store_id         | uuid    | NOT NULL
 #  store_prefix     | text    | NOT NULL
+#  status           | text    | NOT NULL
 # Indexes:
 #  machine_image_version_metal_pkey | PRIMARY KEY btree (id)
 # Check constraints:
-#  size_set_if_enabled | (NOT enabled OR archive_size_mib IS NOT NULL)
+#  archive_size_set_if_status_ready         | (status <> 'ready'::text OR archive_size_mib IS NOT NULL)
+#  machine_image_version_metal_status_check | (status = ANY (ARRAY['creating'::text, 'ready'::text, 'destroying'::text]))
 # Foreign key constraints:
 #  machine_image_version_metal_archive_kek_id_fkey | (archive_kek_id) REFERENCES storage_key_encryption_key(id)
 #  machine_image_version_metal_id_fkey             | (id) REFERENCES machine_image_version(id)

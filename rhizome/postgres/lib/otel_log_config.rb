@@ -223,7 +223,10 @@ class OtelLogConfig
         "limit_mib" => 128,
         "spike_limit_mib" => 32,
       },
-      "batch" => nil,
+      "batch" => {
+        "timeout" => "2s",
+        "send_batch_max_size" => 10240,
+      },
     }
 
     unless @log_destinations.empty?
@@ -279,6 +282,7 @@ class OtelLogConfig
         opts = dest["options"] || {}
         cfg = {
           "endpoint" => dest["url"],
+          "compression" => "gzip",
           "retry_on_failure" => {
             "enabled" => true,
             "initial_interval" => "5s",

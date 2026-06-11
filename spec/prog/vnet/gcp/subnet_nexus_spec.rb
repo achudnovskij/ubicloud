@@ -97,6 +97,31 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus do
       expect(GcpVpc[linked_id].dedicated_for_subnet_id).to be_nil
     end
 
+    it "naps without attaching while the shared VPC has destroy requested" do
+      DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).delete
+      gcp_vpc.incr_destroy
+
+      expect { nx.start }.to nap(5)
+      expect(DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).count).to eq(0)
+    end
+
+    it "naps without attaching while the shared VPC is mid-teardown (destroying set, destroy already consumed)" do
+      DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).delete
+      gcp_vpc.incr_destroying
+      gcp_vpc.strand.update(label: "wait_vpc_network_deleted")
+
+      expect { nx.start }.to nap(5)
+      expect(DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).count).to eq(0)
+    end
+
+    it "attaches while the shared VPC is still being created" do
+      DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).delete
+      gcp_vpc.strand.update(label: "wait_create_vpc")
+
+      expect { nx.start }.to hop("wait_vpc_ready")
+      expect(DB[:private_subnet_gcp_vpc].where(private_subnet_id: ps.id).get(:gcp_vpc_id)).to eq(gcp_vpc.id)
+    end
+
     context "when project.gcp_dedicated_subnet_vpcs is true" do
       before { project.update(gcp_dedicated_subnet_vpcs: true) }
 
@@ -525,7 +550,7 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus do
       ).and_return(delete_op)
 
       expect { nx.destroy }.to hop("wait_delete_subnet")
-      expect(st.reload.stack.first.dig("delete_subnet", "name")).to eq("op-delete-subnet")
+      expect(st.stack.first.dig("delete_subnet", "name")).to eq("op-delete-subnet")
     end
 
     it "cleans up tag value and tag key (per-subnet)" do
@@ -716,6 +741,19 @@ RSpec.describe Prog::Vnet::Gcp::SubnetNexus do
   end
 
   describe "#finish_destroy" do
+    before do
+      allow(subnetworks_client).to receive(:get).and_raise(Google::Cloud::NotFoundError.new("not found"))
+    end
+
+    it "naps while the deleted GCE subnet still resolves" do
+      expect(subnetworks_client).to receive(:get)
+        .with(project: "test-gcp-project", region: "us-central1", subnetwork: "ubicloud-#{ps.ubid}")
+        .and_return(Google::Cloud::Compute::V1::Subnetwork.new(name: "ubicloud-#{ps.ubid}"))
+
+      expect { nx.finish_destroy }.to nap(10)
+      expect(ps).to exist
+    end
+
     it "destroys the subnet and pops" do
       # Create another subnet so gcp_vpc is not the last
       ps2 = PrivateSubnet.create(name: "ps2", location_id: location.id, net6: "fd10:9b0b:6b4b:8fbc::/64",
