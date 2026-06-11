@@ -7,6 +7,8 @@ require "yaml"
 class Prog::Postgres::PostgresServerNexus
   label :setup_otel_collector
 
+  frame_accessor :otel_token_jwt
+
   module PrependMethods
     def run_post_installation_script
       if postgres_server.primary? &&
@@ -370,7 +372,7 @@ EXPORTER
     def otel_token_needs_refresh?
       return false unless Config.postgres_otel_otlp_export_jwt_oidc_provider_id
 
-      cached = strand.stack.first["otel_token_jwt"]
+      cached = otel_token_jwt
       if cached && (cached_iat = cached["iat"]) && (cached_exp = cached["exp"])
         two_thirds_point = cached_iat + (cached_exp - cached_iat) * 2 / 3
         return false if Time.now.to_i < two_thirds_point
@@ -387,7 +389,7 @@ EXPORTER
         return true unless iat && exp
 
         new_jwt = {"iat" => iat, "exp" => exp}
-        update_stack({"otel_token_jwt" => new_jwt}) unless cached == new_jwt
+        self.otel_token_jwt = new_jwt unless cached == new_jwt
 
         current_time = Time.now.to_i
         validity_duration = exp - iat

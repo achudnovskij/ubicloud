@@ -508,13 +508,13 @@ RSpec.describe Prog::Postgres::PostgresServerNexus::PrependMethods do # rubocop:
         expect(st.stack.first["otel_token_jwt"]).to eq({"iat" => now, "exp" => now + 3600})
       end
 
-      it "does not call update_stack when SSH returns iat/exp identical to the cache" do
+      it "does not write otel_token_jwt when SSH returns iat/exp identical to the cache" do
         now = Time.now.to_i
         stale = {"iat" => now - 3500, "exp" => now - 100}
         st.stack.first["otel_token_jwt"] = stale
         stale_token = JWT.encode(stale, nil, "none")
         expect(sshable).to receive(:_cmd).with(anything, log: false).and_return(stale_token)
-        expect(nx).not_to receive(:update_stack)
+        expect(nx).not_to receive(:otel_token_jwt=)
         expect(nx.otel_token_needs_refresh?).to be true
       end
     end
