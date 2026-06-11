@@ -6,6 +6,8 @@ class Prog::Postgres::PostgresResourceNexus
   label :billing_deactivate_suspend
   label :billing_deactivate_wait_backup
 
+  frame_accessor :billing_deactivate_kicked_off_at
+
   module PrependMethods
     def create_billing_record(billing_rate_id:, amount:, slot:)
       location = postgres_resource.location
@@ -79,7 +81,7 @@ class Prog::Postgres::PostgresResourceNexus
       # Record kickoff time so billing_deactivate_wait_backup blocks until a
       # backup completed *after* the lockout — any pre-existing backup is older
       # than the customer's last writes and must not satisfy the gate.
-      update_stack("billing_deactivate_kicked_off_at" => Time.now.utc.iso8601)
+      self.billing_deactivate_kicked_off_at = Time.now.utc.iso8601
       # Reuse the upstream "force a fresh backup now" semaphore — same mechanism
       # as the storage-scale-down path, distinct kickoff-timestamp gate keeps the
       # two flows from being confused.
@@ -88,7 +90,7 @@ class Prog::Postgres::PostgresResourceNexus
     end
 
     def billing_deactivate_wait_backup
-      kicked_off_at = Time.parse(strand.stack.first.fetch("billing_deactivate_kicked_off_at"))
+      kicked_off_at = Time.parse(billing_deactivate_kicked_off_at)
       latest_completed = postgres_resource.timeline.backups.map(&:last_modified).max
       nap 60 if latest_completed.nil? || latest_completed < kicked_off_at
 

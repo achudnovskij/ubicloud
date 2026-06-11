@@ -73,7 +73,7 @@ RSpec.describe Prog::CapacityReservation do
     end)
   end
 
-  def reload_frame = st.reload.stack.first
+  def stack_frame = st.stack.first
 
   def location_gone_exit = {"msg" => "location is gone; capacity reservation strand exiting"}
 
@@ -288,7 +288,7 @@ RSpec.describe Prog::CapacityReservation do
 
   describe ".update_inputs" do
     it "merges the changed input keys into a free strand, preserving prog state, and returns the strand" do
-      nx.update_stack("current_target" => {"c6gd.4xlarge" => {"total" => 6, "per_az" => {}}}, "last_measured_at" => 111)
+      st.update(stack: [st.stack.first.merge("current_target" => {"c6gd.4xlarge" => {"total" => 6, "per_az" => {}}}, "last_measured_at" => 111)])
       expect(described_class.update_inputs(st, {"additional_capacity" => 0.5}).id).to eq(st.id)
       st.reload
       expect(st.stack.first["additional_capacity"]).to eq(0.5)
@@ -467,10 +467,10 @@ RSpec.describe Prog::CapacityReservation do
         .with(/only 2 AZ/, ["CapacityReservation", "InsufficientAZs", location.display_name], [st.ubid], severity: "warning")
         .and_call_original
       expect { nx.measure }.to hop("reconcile")
-      expect(reload_frame["current_target"]).to eq({})
-      expect(reload_frame["reconcile_pending"]).to eq([])
-      expect(reload_frame["last_measured_at"]).to be_within(5).of(Time.now.to_i)
-      expect(reload_frame["azs_insufficient"]).to be true
+      expect(stack_frame["current_target"]).to eq({})
+      expect(stack_frame["reconcile_pending"]).to eq([])
+      expect(stack_frame["last_measured_at"]).to be_within(5).of(Time.now.to_i)
+      expect(stack_frame["azs_insufficient"]).to be true
     end
 
     it "logs instead of paging when the location has fewer than 3 AZs and the action is WARN" do
@@ -479,15 +479,15 @@ RSpec.describe Prog::CapacityReservation do
       expect(Prog::PageNexus).not_to receive(:assemble)
       expect(Clog).to receive(:emit).with("capacity reservation insufficient azs", hash_including(:capacity_reservation_insufficient_azs))
       expect { nx.measure }.to hop("reconcile")
-      expect(reload_frame["current_target"]).to eq({})
-      expect(reload_frame["azs_insufficient"]).to be true
+      expect(stack_frame["current_target"]).to eq({})
+      expect(stack_frame["azs_insufficient"]).to be true
     end
 
     it "clears a stale azs_insufficient on a normal pass once the location has >= 3 AZs" do
       refresh_frame(nx, new_values: {"azs_insufficient" => true, "enable_all_families" => true, "instance_families" => {}})
       allow(nx).to receive(:compute_current_usage).and_return([{}, {}])
       expect { nx.measure }.to hop("reconcile")
-      expect(reload_frame["azs_insufficient"]).to be false
+      expect(stack_frame["azs_insufficient"]).to be false
     end
 
     context "when sizing" do
@@ -501,7 +501,7 @@ RSpec.describe Prog::CapacityReservation do
       def measure_with(usage, per_az: {})
         allow(nx).to receive(:compute_current_usage).and_return([usage, per_az])
         expect { nx.measure }.to hop("reconcile")
-        reload_frame
+        stack_frame
       end
 
       it "applies the +3 buffer floor for zero current usage" do
@@ -601,7 +601,7 @@ RSpec.describe Prog::CapacityReservation do
         {"c6gd.4xlarge" => {"us-west-2a" => 5}, "r6gd.large" => {"us-west-2b" => 8}},
       ])
       expect { nx.measure }.to hop("reconcile")
-      frame = reload_frame
+      frame = stack_frame
       expect(frame["current_target"].keys).to eq(["c6gd.4xlarge"]) # only the listed type is reserved
       expect(frame["reconcile_pending"]).to eq(["c6gd.4xlarge"])
       # current_usage_per_az keeps the full observed usage, including the unlisted r6gd.large.
@@ -614,7 +614,7 @@ RSpec.describe Prog::CapacityReservation do
       resource.update(target_vm_size: "c6gd.4xlarge", ha_type: "sync")
       refresh_frame(nx, new_values: {"enable_all_families" => true})
       expect { nx.measure }.to hop("reconcile")
-      expect(reload_frame["current_target"]["c6gd.4xlarge"]["total"]).to eq(6) # 3 servers + max(ceil(0.6),3)=3
+      expect(stack_frame["current_target"]["c6gd.4xlarge"]["total"]).to eq(6) # 3 servers + max(ceil(0.6),3)=3
     end
   end
 
@@ -778,7 +778,7 @@ RSpec.describe Prog::CapacityReservation do
         "reconcile_pending" => ["c6gd.4xlarge", "c6gd.8xlarge"],
       })
       expect { nx.reconcile }.to nap(0)
-      frame = reload_frame
+      frame = stack_frame
       expect(frame["current_target"]["c6gd.4xlarge"]["per_az"]).to eq({"us-west-2a" => 3, "us-west-2b" => 3, "us-west-2c" => 3})
       expect(frame["reconcile_pending"]).to eq(["c6gd.8xlarge"])
     end
@@ -791,7 +791,7 @@ RSpec.describe Prog::CapacityReservation do
         "current_usage_per_az" => {}, "reconcile_pending" => ["c6gd.4xlarge"],
       })
       expect { nx.reconcile }.to nap(0)
-      frame = reload_frame
+      frame = stack_frame
       expect(frame["reconcile_pending"]).to eq([])
       expect(frame["current_target"]["c6gd.4xlarge"]["per_az"]).to eq({"us-west-2a" => 7}) # left intact
     end
@@ -803,7 +803,7 @@ RSpec.describe Prog::CapacityReservation do
       })
       client.stub_responses(:describe_capacity_reservations, Aws::EC2::Errors::RequestLimitExceeded.new(nil, "slow down"))
       expect { nx.reconcile }.to nap(60)
-      expect(reload_frame["reconcile_pending"]).to eq(["c6gd.4xlarge"])
+      expect(stack_frame["reconcile_pending"]).to eq(["c6gd.4xlarge"])
     end
 
     it "pages and skips the type on an ODCR quota error" do
@@ -816,7 +816,7 @@ RSpec.describe Prog::CapacityReservation do
         .with(/ODCR quota error/, ["CapacityReservation", "ODCRQuotaExceeded", location.display_name, "c6gd.4xlarge"], [st.ubid], severity: "warning")
         .and_call_original
       expect { nx.reconcile }.to nap(0)
-      expect(reload_frame["reconcile_pending"]).to eq([])
+      expect(stack_frame["reconcile_pending"]).to eq([])
     end
 
     it "pages and continues on an unexpected AWS error" do
@@ -829,7 +829,7 @@ RSpec.describe Prog::CapacityReservation do
         .with(/unexpected AWS error/, ["CapacityReservation", "ReconcileError", location.display_name, "c6gd.4xlarge"], [st.ubid], severity: "warning")
         .and_call_original
       expect { nx.reconcile }.to nap(0)
-      expect(reload_frame["reconcile_pending"]).to eq([])
+      expect(stack_frame["reconcile_pending"]).to eq([])
     end
 
     it "records the AZs AWS could not satisfy as a hash az => first-unmet time" do
@@ -839,7 +839,7 @@ RSpec.describe Prog::CapacityReservation do
       })
       cap_azs("us-west-2c" => 0) # AZ-c refuses every reservation
       expect { nx.reconcile }.to nap(0)
-      entry = reload_frame["current_target"]["c6gd.4xlarge"]
+      entry = stack_frame["current_target"]["c6gd.4xlarge"]
       expect(entry["unmet_azs"].keys).to eq(["us-west-2c"])
       expect(entry["unmet_azs"]["us-west-2c"]).to be_within(5).of(Time.now.to_i) # stamped now
       expect(entry["per_az"]["us-west-2c"]).to eq(0)
@@ -855,7 +855,7 @@ RSpec.describe Prog::CapacityReservation do
       expect(Prog::PageNexus).to receive(:assemble)
         .with(/unmet in us-west-2c/, ["CapacityReservation", "UnmetCapacity", location.display_name, "c6gd.4xlarge", "us-west-2c"], [st.ubid], severity: "warning").and_call_original
       expect { nx.reconcile }.to nap(0)
-      expect(reload_frame["current_target"]["c6gd.4xlarge"]["unmet_azs"]["us-west-2c"]).to eq(long_ago) # not reset
+      expect(stack_frame["current_target"]["c6gd.4xlarge"]["unmet_azs"]["us-west-2c"]).to eq(long_ago) # not reset
     end
 
     it "does not page an AZ unmet for less than a day" do
@@ -875,7 +875,7 @@ RSpec.describe Prog::CapacityReservation do
         "current_usage_per_az" => {}, "reconcile_pending" => ["c6gd.4xlarge"],
       })
       expect { nx.reconcile }.to nap(0) # default stubs let every AZ succeed
-      expect(reload_frame["current_target"]["c6gd.4xlarge"]).not_to have_key("unmet_azs")
+      expect(stack_frame["current_target"]["c6gd.4xlarge"]).not_to have_key("unmet_azs")
     end
 
     it "logs and skips without paging on a state-transition error (e.g. an operator-cancelled ODCR)" do
@@ -889,7 +889,7 @@ RSpec.describe Prog::CapacityReservation do
       expect(Clog).to receive(:emit).with("capacity reservation reconcile error", anything)
       expect(Prog::PageNexus).not_to receive(:assemble)
       expect { nx.reconcile }.to nap(0)
-      expect(reload_frame["reconcile_pending"]).to eq([]) # skipped this pass, retried next
+      expect(stack_frame["reconcile_pending"]).to eq([]) # skipped this pass, retried next
     end
 
     it "cancels ODCRs for orphaned types when remove_orphaned_reservations is set" do

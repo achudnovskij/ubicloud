@@ -7,6 +7,9 @@
 class Prog::CapacityReservation < Prog::Base
   semaphore :pause, :rebalance, :destroy
 
+  frame_accessor :current_target, :last_observed_usage, :current_usage_per_az,
+    :reconcile_pending, :last_measured_at, :azs_insufficient
+
   VALID_CONSTRAINT_KEYS = %w[minimum_cpu minimum_storage sizes minimum_provisioned_cpu minimum_provisioned_storage].freeze
   # The "provisioned" variants resolve to the same catalog/threshold size set as
   # their bare counterparts, but eligible_instance_types then intersects them with
@@ -224,14 +227,12 @@ class Prog::CapacityReservation < Prog::Base
     azs = location_az_names
     if azs.size < 3
       report_insufficient_azs("only #{azs.size} AZ(s) in location; need >=3")
-      update_stack(
-        "current_target" => {},
-        "last_observed_usage" => {},
-        "current_usage_per_az" => {},
-        "reconcile_pending" => [],
-        "last_measured_at" => Time.now.to_i,
-        "azs_insufficient" => true,
-      )
+      self.current_target = {}
+      self.last_observed_usage = {}
+      self.current_usage_per_az = {}
+      self.reconcile_pending = []
+      self.last_measured_at = Time.now.to_i
+      self.azs_insufficient = true
       hop_reconcile
     end
     # Reached only with >= 3 AZs: clear any stale location-wide InsufficientAZs page.
@@ -288,19 +289,17 @@ class Prog::CapacityReservation < Prog::Base
       new_target[type]["unmet_azs"] = previous.dig(type, "unmet_azs") if previous.dig(type, "unmet_azs")
     end
 
-    update_stack(
-      "current_target" => new_target,
-      "last_observed_usage" => last_observed,
-      # Full per-AZ usage for every running type, not just the targeted ones:
-      # kept intentionally as observability of what is actually running, even
-      # under the strict filter where unlisted types are observed but not
-      # reserved. reconcile only reads the keys it targets, so the extra entries
-      # are harmless.
-      "current_usage_per_az" => usage_per_az,
-      "reconcile_pending" => new_target.keys,
-      "last_measured_at" => Time.now.to_i,
-      "azs_insufficient" => false,
-    )
+    self.current_target = new_target
+    self.last_observed_usage = last_observed
+    # Full per-AZ usage for every running type, not just the targeted ones:
+    # kept intentionally as observability of what is actually running, even
+    # under the strict filter where unlisted types are observed but not
+    # reserved. reconcile only reads the keys it targets, so the extra entries
+    # are harmless.
+    self.current_usage_per_az = usage_per_az
+    self.reconcile_pending = new_target.keys
+    self.last_measured_at = Time.now.to_i
+    self.azs_insufficient = false
     hop_reconcile
   end
 
@@ -324,7 +323,8 @@ class Prog::CapacityReservation < Prog::Base
         entry = current_target[type].merge("per_az" => achieved)
         # Surface (or clear) the capacity shortfall recorded by reconcile_instance_type.
         entry = @last_unmet_azs.empty? ? entry.except("unmet_azs") : entry.merge("unmet_azs" => @last_unmet_azs)
-        update_stack("current_target" => current_target.merge(type => entry), "reconcile_pending" => pending[1..])
+        self.current_target = current_target.merge(type => entry)
+        self.reconcile_pending = pending[1..]
         # The type reconciled to completion without an AWS error: clear any stale
         # quota/unexpected-error page from a prior pass. Only here, not in the else
         # branch -- a nil achieved means the type was skipped for insufficient AZs
@@ -333,7 +333,7 @@ class Prog::CapacityReservation < Prog::Base
         resolve_page("ReconcileError", type)
       else
         # type was paged-and-skipped this pass; leave its prior per_az intact.
-        update_stack("reconcile_pending" => pending[1..])
+        self.reconcile_pending = pending[1..]
       end
       # One instance type per run; reschedule immediately to handle the next
       nap 0
@@ -359,7 +359,7 @@ class Prog::CapacityReservation < Prog::Base
         # Genuinely unexpected: page and skip the type, but keep going.
         page("ReconcileError", "unexpected AWS error for #{type}: #{e.code}", type)
       end
-      update_stack("reconcile_pending" => pending[1..])
+      self.reconcile_pending = pending[1..]
       nap 0
     end
   end

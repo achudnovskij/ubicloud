@@ -86,7 +86,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       expect(primary).to receive(:apply_lockout).ordered
 
       expect { nx.billing_deactivate_suspend }.to hop("billing_deactivate_wait_backup")
-      expect(st.reload.stack.first["billing_deactivate_kicked_off_at"]).to match(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\z/)
+      expect(st.stack.first["billing_deactivate_kicked_off_at"]).to match(/\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\z/)
     end
 
     it "naps 30 when timeline has no leader, without locking out servers or cascading to replicas (so retries don't pile up dead work)" do
