@@ -13,7 +13,7 @@ class ParseableResource < Sequel::Model
     encrypted_columns: [:admin_password, :root_cert_key_1, :root_cert_key_2, :secret_key]
   plugin SemaphoreMethods, :destroy, :reconfigure
 
-  LOG_BUCKET_EXPIRATION_DAYS = 7
+  LOG_RETENTION_DAYS = 7
 
   def self.for_project(project_id)
     ParseableResource.where(
@@ -31,7 +31,7 @@ class ParseableResource < Sequel::Model
   end
 
   def dns_zone
-    @dns_zone ||= DnsZone.where(project_id: Config.parseable_service_project_id, name: Config.parseable_host_name).first
+    @dns_zone ||= DnsZone.first(project_id: Config.parseable_service_project_id, name: Config.parseable_host_name)
   end
 
   def root_certs

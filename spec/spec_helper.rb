@@ -25,6 +25,8 @@ ENV["OMNIAUTH_GOOGLE_ID"] = "1234567890"
 
 require "warning"
 Warning.ignore(:void_context, /.*ubicloud\/loader\.rb/)
+Warning.ignore(:unused_var, /.*lib\/acme\/client\/certificate_request\.rb/)
+Warning.ignore(:mismatched_indentations, /.*lib\/omniauth\/strategies\/oauth2\.rb/)
 Warning.ignore(/URI::RFC3986_PARSER.make_regexp is obsolete/, /.*lib\/capybara\/session\/config\.rb/)
 # https://github.com/prawnpdf/prawn/issues/1349
 Warning.ignore(/circular require considered harmful/, /.*lib\/prawn\/fonts\.rb/)
@@ -307,7 +309,7 @@ RSpec.configure do |config|
       machine_image_id ||= MachineImage.create(name:, project_id:, arch: "x64", location_id:).id
       miv = MachineImageVersion.create(machine_image_id:, version:, actual_size_mib: 5 * 1024)
       archive_kek = StorageKeyEncryptionKey.create_random(auth_data: "auth_data")
-      MachineImageVersionMetal.create_with_id(miv, archive_kek_id: archive_kek.id, store_id: machine_image_store_id, store_prefix:, enabled: true, archive_size_mib: 1024)
+      MachineImageVersionMetal.create_with_id(miv, archive_kek_id: archive_kek.id, store_id: machine_image_store_id, store_prefix:, status: "ready", archive_size_mib: 1024)
     end
 
     def create_vm_host_slice(**args)
@@ -396,7 +398,6 @@ RSpec.configure do |config|
     end
 
     def frame_value(prog, key)
-      prog.strand.reload
       prog.strand.stack.first[key]
     end
   end)

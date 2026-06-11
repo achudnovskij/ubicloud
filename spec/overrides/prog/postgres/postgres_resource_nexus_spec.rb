@@ -80,7 +80,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       timeline = nx.postgres_resource.timeline
       allow(nx.postgres_resource).to receive_messages(servers: [primary, standby], timeline:)
 
-      expect(timeline).to receive(:incr_take_backup_for_scale_down)
+      expect(timeline).to receive(:incr_take_backup_for_converge)
       expect(nx).to receive(:register_deadline).with("destroy", Prog::Postgres::PostgresResourceNexus::BILLING_DEACTIVATE_DEADLINE_SECONDS)
       expect(standby).to receive(:apply_lockout).ordered
       expect(primary).to receive(:apply_lockout).ordered
@@ -99,7 +99,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
 
       expect(primary).not_to receive(:apply_lockout)
       expect(replica).not_to receive(:incr_billing_deactivate)
-      expect(timeline).not_to receive(:incr_take_backup_for_scale_down)
+      expect(timeline).not_to receive(:incr_take_backup_for_converge)
 
       expect { nx.billing_deactivate_suspend }.to nap(30)
     end
@@ -110,7 +110,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       allow(nx.postgres_resource).to receive_messages(parent:, timeline: shared_timeline)
       expect(nx).to receive(:register_deadline).with("destroy", Prog::Postgres::PostgresResourceNexus::BILLING_DEACTIVATE_DEADLINE_SECONDS)
       expect(nx.postgres_resource).not_to receive(:servers)
-      expect(shared_timeline).not_to receive(:incr_take_backup_for_scale_down)
+      expect(shared_timeline).not_to receive(:incr_take_backup_for_converge)
 
       expect { nx.billing_deactivate_suspend }.to hop("destroy")
     end
@@ -123,7 +123,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       parent = instance_double(PostgresResource, timeline: shared_timeline)
       allow(nx.postgres_resource).to receive_messages(parent:, timeline: shared_timeline)
 
-      expect(shared_timeline).not_to receive(:incr_take_backup_for_scale_down)
+      expect(shared_timeline).not_to receive(:incr_take_backup_for_converge)
       expect(nx.postgres_resource).not_to receive(:servers)
       expect { nx.billing_deactivate_suspend }.to hop("destroy")
     end
@@ -136,7 +136,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       parent_timeline = instance_double(PostgresTimeline, id: "parent-tl-id")
       parent = instance_double(PostgresResource, timeline: parent_timeline)
       allow(nx.postgres_resource).to receive_messages(parent:, servers: [primary], timeline: own_timeline)
-      allow(own_timeline).to receive(:incr_take_backup_for_scale_down)
+      allow(own_timeline).to receive(:incr_take_backup_for_converge)
 
       expect { nx.billing_deactivate_suspend }.to hop("billing_deactivate_wait_backup")
     end
@@ -145,7 +145,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       primary = mock_server(is_representative: true)
       timeline = nx.postgres_resource.timeline
       allow(nx.postgres_resource).to receive_messages(servers: [primary], timeline:)
-      allow(timeline).to receive(:incr_take_backup_for_scale_down)
+      allow(timeline).to receive(:incr_take_backup_for_converge)
 
       expect(nx).to receive(:decr_billing_deactivate)
       expect { nx.billing_deactivate_suspend }.to hop("billing_deactivate_wait_backup")
@@ -155,7 +155,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       primary = mock_server(is_representative: true)
       timeline = nx.postgres_resource.timeline
       allow(nx.postgres_resource).to receive_messages(servers: [primary], timeline:)
-      allow(timeline).to receive(:incr_take_backup_for_scale_down)
+      allow(timeline).to receive(:incr_take_backup_for_converge)
       replica_a = instance_double(PostgresResource)
       replica_b = instance_double(PostgresResource)
       allow(nx.postgres_resource).to receive(:read_replicas).and_return([replica_a, replica_b])
@@ -169,7 +169,7 @@ RSpec.describe Prog::Postgres::PostgresResourceNexus::PrependMethods do # ruboco
       primary = mock_server(is_representative: true)
       timeline = nx.postgres_resource.timeline
       allow(nx.postgres_resource).to receive_messages(servers: [primary], timeline:)
-      allow(timeline).to receive(:incr_take_backup_for_scale_down)
+      allow(timeline).to receive(:incr_take_backup_for_converge)
 
       expect { nx.billing_deactivate_suspend }.to hop("billing_deactivate_wait_backup")
       # In-memory stack (no reload) must use a string key — wait_backup fetches via "billing_deactivate_kicked_off_at"

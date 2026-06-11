@@ -210,14 +210,18 @@ class Prog::Vnet::Gcp::VpcNexus < Prog::Base
   end
 
   label def destroy
-    register_deadline("destroy", 5 * 60)
     decr_destroy
 
-    unless gcp_vpc.private_subnets.empty?
-      Clog.emit("Cannot destroy VPC with active subnets", gcp_vpc)
-      nap 10
+    # Serializes with the attach decision in SubnetNexus#start.
+    gcp_vpc.lock!(:no_key_update)
+
+    unless gcp_vpc.private_subnets_dataset.empty?
+      Clog.emit("Dropping VPC destroy, subnets are attached", gcp_vpc)
+      decr_destroying
+      hop_wait
     end
 
+    register_deadline("destroy", 10 * 60)
     hop_enumerate_destroy_state
   end
 
@@ -483,7 +487,7 @@ class Prog::Vnet::Gcp::VpcNexus < Prog::Base
   label def wait_vpc_network_deleted
     poll_and_clear_gcp_op("delete_vpc") do |err_op|
       begin
-        credential.networks_client.get(project: gcp_project_id, network: gcp_vpc.name)
+        get_vpc_network
       rescue Google::Cloud::NotFoundError
         Clog.emit("GCP VPC network already gone despite LRO error; proceeding",
           {gcp_vpc_already_gone: {network: gcp_vpc.name, lro_error: op_error_message(err_op)}})
@@ -496,11 +500,20 @@ class Prog::Vnet::Gcp::VpcNexus < Prog::Base
   end
 
   label def finalize_destroy
-    gcp_vpc.destroy
-    pop "vpc destroyed"
+    begin
+      get_vpc_network
+    rescue Google::Cloud::NotFoundError
+      gcp_vpc.destroy
+      pop "vpc destroyed"
+    end
+    nap 10
   end
 
   private
+
+  def get_vpc_network
+    credential.networks_client.get(project: gcp_project_id, network: gcp_vpc.name)
+  end
 
   def get_firewall_policy
     credential.network_firewall_policies_client.get(

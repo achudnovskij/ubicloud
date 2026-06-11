@@ -10,7 +10,7 @@ class Prog::Postgres::PostgresTimelineNexus
     # to #wait — wait will self-destruct the orphan timeline once it's old enough.
     def take_backup
       if postgres_timeline.leader.nil?
-        decr_take_backup_for_scale_down
+        decr_take_backup_for_converge
         hop_wait
       end
 

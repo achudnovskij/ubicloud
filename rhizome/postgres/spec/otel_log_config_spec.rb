@@ -110,6 +110,10 @@ RSpec.describe OtelLogConfig do
       expect(parsed["processors"]).to have_key("batch")
     end
 
+    it "configures the batch processor with a 2s timeout and 10k max batch size" do
+      expect(parsed["processors"]["batch"]).to include("timeout" => "2s", "send_batch_max_size" => 10240)
+    end
+
     it "includes a memory_limiter processor" do
       expect(parsed["processors"]["memory_limiter"]).to include("limit_mib", "spike_limit_mib")
     end
@@ -237,6 +241,11 @@ RSpec.describe OtelLogConfig do
       it "creates an otlphttp exporter with the correct endpoint" do
         exporter = parsed["exporters"]["otlp_http/dest0"]
         expect(exporter["endpoint"]).to eq("https://otlp.nr-data.net")
+      end
+
+      it "enables gzip compression on the exporter" do
+        exporter = parsed["exporters"]["otlp_http/dest0"]
+        expect(exporter["compression"]).to eq("gzip")
       end
 
       it "omits headers from the exporter when nil" do

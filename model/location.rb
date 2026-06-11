@@ -5,6 +5,7 @@ require_relative "../model"
 class Location < Sequel::Model
   plugin ResourceMethods
   plugin ProviderDispatcher, __FILE__
+  plugin SemaphoreMethods, :destroy
   dataset_module Pagination
 
   one_to_one :location_credential_aws, key: :id, read_only: true
@@ -39,6 +40,7 @@ class Location < Sequel::Model
     where(project_id: nil, name: ["hetzner-fsn1", "leaseweb-wdc02"])
       .or(provider: "aws", project_id: nil)
       .or(provider: "gcp", project_id: nil, name: visible_gcp_names || [])
+      .order(:display_name)
       .all
   end
 

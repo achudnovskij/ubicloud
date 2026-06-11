@@ -126,6 +126,10 @@ RSpec.describe Clover, "auth" do
     expect(Mail::TestMailer.deliveries.length).to eq 1
     verify_link = Mail::TestMailer.deliveries.first.html_part.body.match(/(\/verify-account.+?)"/)[1]
 
+    visit verify_link.sub(Account.get(:id), "test")
+    expect(page.title).to eq("Ubicloud - Login")
+    expect(page).to have_flash_error("There was an error verifying your account: invalid verify account key")
+
     visit verify_link
     expect(page.title).to eq("Ubicloud - Verify Account")
 
@@ -588,6 +592,19 @@ RSpec.describe Clover, "auth" do
       vm = create_vm
       project = Account[email: TEST_USER_EMAIL].projects.first
       vm.update(project_id: project.id)
+
+      visit "/account/close-account"
+
+      click_button "Close Account"
+
+      expect(page.title).to eq("Ubicloud - Close Account")
+      expect(page).to have_flash_error("'Default' project has some resources. Delete all related resources first.")
+      expect(audit_log_hash).to eq({})
+    end
+
+    it "cannot close account if the project has GithubInstallation" do
+      project = Account[email: TEST_USER_EMAIL].projects.first
+      GithubInstallation.create(name: "unique-gh-install", installation_id: 999, type: "User", project_id: project.id)
 
       visit "/account/close-account"
 

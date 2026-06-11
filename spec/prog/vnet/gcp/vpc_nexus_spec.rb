@@ -496,7 +496,7 @@ RSpec.describe Prog::Vnet::Gcp::VpcNexus do
         Google::Cloud::Compute::V1::FirewallPolicy.new(name: vpc_name, associations: []),
       )
       expect { nx.wait_firewall_policy_associated }.to hop("create_firewall_policy")
-      expect(st.reload.stack.first["associate_fw_policy"]).to be_nil
+      expect(st.stack.first["associate_fw_policy"]).to be_nil
     end
 
     it "hops back to create_firewall_policy when LRO errors and re-fetched policy has nil associations" do
@@ -656,18 +656,28 @@ RSpec.describe Prog::Vnet::Gcp::VpcNexus do
   describe "#destroy" do
     it "registers deadline and hops to enumerate_destroy_state when no subnets remain" do
       expect { nx.destroy }.to hop("enumerate_destroy_state")
-      expect(Time.parse(nx.strand.stack.first["deadline_at"])).to be_within(5).of(Time.now + 5 * 60)
+      expect(Time.parse(nx.strand.stack.first["deadline_at"])).to be_within(10).of(Time.now + 10 * 60)
       expect(nx.strand.stack.first["deadline_target"]).to eq("destroy")
     end
 
-    it "naps when subnets still exist" do
+    it "drops the destroy, clears destroying, and hops back to wait when subnets are attached" do
+      # Semaphore.incr inserts nothing if the strand row does not exist yet.
+      st
       ps = PrivateSubnet.create(
         name: "ps", location_id: location.id, project_id: project.id,
         net6: "fd10:9b0b:6b4b:8fbb::/64", net4: "10.0.0.0/26", state: "waiting",
       )
       DB[:private_subnet_gcp_vpc].insert(private_subnet_id: ps.id, gcp_vpc_id: gcp_vpc.id)
+      gcp_vpc.incr_destroy
+      gcp_vpc.incr_destroying
+      expect(gcp_vpc.destroying_set?).to be(true)
 
-      expect { nx.destroy }.to nap(10)
+      expect(nx.gcp_vpc).to receive(:lock!).with(:no_key_update).and_call_original
+
+      expect { nx.destroy }.to hop("wait")
+      expect(gcp_vpc.reload.destroy_set?).to be(false)
+      expect(gcp_vpc.reload.destroying_set?).to be(false)
+      expect(nx.strand.stack.first["deadline_target"]).to be_nil
     end
   end
 
@@ -1288,10 +1298,23 @@ RSpec.describe Prog::Vnet::Gcp::VpcNexus do
   end
 
   describe "#finalize_destroy" do
-    it "destroys GcpVpc row and pops" do
+    it "destroys GcpVpc row and pops once the network no longer resolves" do
       vpc_id = gcp_vpc.id
+      expect(networks_client).to receive(:get)
+        .with(project: "test-gcp-project", network: vpc_name)
+        .and_raise(Google::Cloud::NotFoundError.new("not found"))
+
       expect { nx.finalize_destroy }.to exit({"msg" => "vpc destroyed"})
       expect(GcpVpc[vpc_id]).to be_nil
+    end
+
+    it "naps while the deleted network still resolves" do
+      expect(networks_client).to receive(:get)
+        .with(project: "test-gcp-project", network: vpc_name)
+        .and_return(Google::Cloud::Compute::V1::Network.new(name: vpc_name))
+
+      expect { nx.finalize_destroy }.to nap(10)
+      expect(gcp_vpc).to exist
     end
   end
 

@@ -27,7 +27,7 @@ class PostgresResource < Sequel::Model
     :destroy, :refresh_certificates, :use_different_az, :use_old_walg_command, :check_disk_usage,
     :storage_auto_scale_action_performed_80, :storage_auto_scale_action_performed_85, :storage_auto_scale_action_performed_90,
     :storage_auto_scale_canceled, :storage_auto_scale_not_cancellable, :skip_strict_memory_overcommit,
-    :billing_deactivate
+    :billing_deactivate, :bypass_maintenance_window
   include ObjectTag::Cleanup
 
   ServerExclusionFilters = Struct.new(:exclude_host_ids, :exclude_data_centers, :exclude_availability_zones, :availability_zone)
@@ -255,7 +255,7 @@ class PostgresResource < Sequel::Model
   end
 
   def upgrade_stage
-    strand.children_dataset.where(prog: "Postgres::ConvergePostgresResource").first&.label
+    strand.children_dataset.first(prog: "Postgres::ConvergePostgresResource")&.label
   end
 
   def upgrade_status
@@ -377,7 +377,7 @@ class PostgresResource < Sequel::Model
   def can_cancel_storage_auto_scale?
     return false if storage_auto_scale_canceled_set? || storage_auto_scale_not_cancellable_set? || !storage_auto_scale_action_performed_90_set?
 
-    converge_strand = strand.children_dataset.where(prog: "Postgres::ConvergePostgresResource").first
+    converge_strand = strand.children_dataset.first(prog: "Postgres::ConvergePostgresResource")
     return false unless converge_strand
 
     ["start", "provision_servers", "wait_servers_to_be_ready", "wait_for_maintenance_window"].include?(converge_strand.label)
@@ -560,6 +560,7 @@ class PostgresResource < Sequel::Model
     return unless (client = ParseableResource.client_for_project(Config.postgres_service_project_id))
 
     client.create_stream(stream_name: ubid)
+    client.set_retention(stream_name: ubid, duration_days: ParseableResource::LOG_RETENTION_DAYS)
     client.create_role(role_name: ubid, privileges: [{privilege: "ingestor", resource: {stream: ubid}}])
     password = client.create_user(user_id: ubid, roles: [ubid])
     update(parseable_password: password)
