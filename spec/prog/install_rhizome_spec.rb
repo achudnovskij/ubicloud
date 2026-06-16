@@ -82,5 +82,31 @@ RSpec.describe Prog::InstallRhizome do
       expect(ir.sshable.rhizome_installation.commit).to eq(Config.git_commit_hash)
       expect(ir.sshable.rhizome_installation.installed_at).to be_within(10).of(Time.now)
     end
+
+    it "hops to run postgres migrations on a re-install of a postgres server" do
+      RhizomeInstallation.dataset.insert(
+        id: sshable.id,
+        folder: "postgres",
+        commit: "old_commit",
+        digest: "old_digest",
+        installed_at: Time.now - 3600,
+      )
+      expect(ir).to receive(:frame).and_return({"target_folder" => "postgres", "rhizome_digest" => "abc"}).at_least(:once)
+      expect(ir.sshable).to receive(:_cmd).with("common/bin/validate")
+      expect { ir.validate }.to hop("run_postgres_migrations")
+    end
+
+    it "does not run migrations on the first install of a postgres server" do
+      expect(ir).to receive(:frame).and_return({"target_folder" => "postgres", "rhizome_digest" => "abc"}).at_least(:once)
+      expect(ir.sshable).to receive(:_cmd).with("common/bin/validate")
+      expect { ir.validate }.to exit({"msg" => "installed rhizome"})
+    end
+  end
+
+  describe "#run_postgres_migrations" do
+    it "runs the postgres migrate script and exits" do
+      expect(ir.sshable).to receive(:_cmd).with("sudo postgres/bin/migrate")
+      expect { ir.run_postgres_migrations }.to exit({"msg" => "installed rhizome"})
+    end
   end
 end

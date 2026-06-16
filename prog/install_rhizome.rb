@@ -66,11 +66,23 @@ class Prog::InstallRhizome < Prog::Base
     folder = target_folder
     commit = Config.git_commit_hash
     digest = rhizome_digest
+    # A prior record means this is a re-install (a rhizome upgrade), not the first install.
+    reinstall = !RhizomeInstallation[sshable.id].nil?
     RhizomeInstallation.dataset.insert_conflict(
       target: :id,
       update: {folder:, commit:, digest:, installed_at: Sequel::CURRENT_TIMESTAMP},
     ).insert(id: sshable.id, folder:, commit:, digest:)
 
+    # On a re-install (rhizome upgrade) of a Postgres server, apply any pending database
+    # migrations. We skip it on the first install because the resource's own provisioning
+    # flow applies migrations.
+    hop_run_postgres_migrations if reinstall && folder == "postgres"
+
+    pop "installed rhizome"
+  end
+
+  label def run_postgres_migrations
+    sshable.cmd("sudo postgres/bin/migrate")
     pop "installed rhizome"
   end
 end
